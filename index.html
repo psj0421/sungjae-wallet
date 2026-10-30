@@ -305,6 +305,17 @@ h1, h2, h3 { text-wrap: balance; }
 .seg { display: grid; grid-template-columns: 1fr 1fr; background: var(--fill); border-radius: 12px; padding: 3px; gap: 2px; }
 .seg button { height: 36px; border-radius: 10px; font-size: 14px; font-weight: 600; color: var(--mute); transition: background .15s, color .15s; }
 .seg button[aria-pressed="true"] { background: var(--card); color: var(--ink); box-shadow: 0 1px 3px rgba(0, 0, 0, .08); }
+/* 5차: 예산 기간 */
+.period-row { display: flex; align-items: center; gap: 10px; width: 100%; margin: 4px 0 6px; padding: 10px 12px; border-radius: 12px; background: var(--fill); text-align: left; color: var(--ink-2); }
+.period-row:hover { background: var(--fill-2); }
+.period-row.on { background: var(--blue-soft, var(--fill)); }
+.period-row .pr-ic { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: var(--card); color: var(--blue); flex: none; }
+.period-row .pr-main { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 14px; font-weight: 600; color: var(--ink); }
+.period-row .pr-main small { font-size: 12px; font-weight: 500; color: var(--mute); margin-top: 1px; }
+.period-row .pr-go { font-size: 13px; font-weight: 600; color: var(--blue); flex: none; }
+.date-field input { text-align: left; font-family: inherit; color: var(--ink); color-scheme: light dark; }
+.chip[aria-pressed="true"] { background: var(--blue); color: #fff; }
+.cmp.two .cmp-row { grid-template-columns: auto 1fr; } .cmp.two .cmp-row > :last-child { text-align: right; }
 .report-head { margin: 22px 0 4px; }
 .report-head .eyebrow { color: var(--sub); font-size: 15px; }
 .report-head .big { font-size: 30px; }
@@ -753,20 +764,56 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
     return daysInMonth(y, m) - d + 1;
   }
 
+  // ───────── 5차: 기간 지정 예산 ─────────
+  // period = { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD' } (둘 다 포함). 없거나 기간 밖이면 달력 한 달 기준.
+  const MAX_PERIOD_DAYS = 366;
+  const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+  function dayDiff(a, b) {
+    const A = parts(a), C = parts(b);
+    return Math.round((Date.UTC(C.y, C.m - 1, C.d) - Date.UTC(A.y, A.m - 1, A.d)) / 86400000);
+  }
+
+  function periodDays(p) { return dayDiff(p.start, p.end) + 1; }
+
+  function makePeriod(start, days) { return { start, end: addDays(start, days - 1) }; }
+
+  function isValidPeriod(p) {
+    if (!p || typeof p.start !== 'string' || typeof p.end !== 'string') return false;
+    if (!DATE_RE.test(p.start) || !DATE_RE.test(p.end) || p.start > p.end) return false;
+    return periodDays(p) <= MAX_PERIOD_DAYS;
+  }
+
+  function periodRange(today, period) {
+    let custom = false, state = 'month';
+    if (isValidPeriod(period)) {
+      if (today < period.start) state = 'upcoming';
+      else if (today > period.end) state = 'ended';
+      else { custom = true; state = 'active'; }
+    }
+    const { y, m } = parts(today);
+    const start = custom ? period.start : today.slice(0, 7) + '-01';
+    const end = custom ? period.end : today.slice(0, 7) + '-' + pad(daysInMonth(y, m));
+    const days = dayDiff(start, end) + 1, elapsed = dayDiff(start, today) + 1;
+    return { start, end, days, elapsed, daysLeft: days - elapsed + 1, custom, state };
+  }
+
+  const inRange = (date, r) => date >= r.start && date <= r.end;
+
   function isValidAmount(v) {
     return typeof v === 'number' && Number.isInteger(v) && v > 0 && v <= 100000000;
   }
 
-  function summary({ budget, expenses, today }) {
-    const month = today.slice(0, 7);
+  function summary({ budget, expenses, today, period }) {
+    const r = periodRange(today, period);
     let spentMonth = 0, spentBefore = 0, spentToday = 0;
     for (const e of expenses) {
-      if (e.date.slice(0, 7) !== month) continue;
+      if (!inRange(e.date, r)) continue;
       spentMonth += e.amount;
       if (e.date < today) spentBefore += e.amount;
       else if (e.date === today) spentToday += e.amount;
     }
-    const daysLeft = daysLeftInMonth(today);
+    const daysLeft = r.daysLeft;
     const dailyAllowance = Math.max(0, Math.floor((budget - spentBefore) / daysLeft));
     return {
       daysLeft,
@@ -778,11 +825,11 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
     };
   }
 
-  function categoryTotals({ expenses, today }) {
-    const month = today.slice(0, 7);
+  function categoryTotals({ expenses, today, period }) {
+    const r = periodRange(today, period);
     const map = new Map();
     for (const e of expenses) {
-      if (e.date.slice(0, 7) !== month) continue;
+      if (!inRange(e.date, r)) continue;
       const t = map.get(e.category) || { category: e.category, amount: 0, count: 0 };
       t.amount += e.amount; t.count += 1;
       map.set(e.category, t);
@@ -798,9 +845,9 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
     return 'ok';
   }
 
-  function envelopes({ budget = 0, limits = {}, expenses, today }) {
+  function envelopes({ budget = 0, limits = {}, expenses, today, period }) {
     const spentBy = {};
-    for (const t of categoryTotals({ expenses, today })) spentBy[t.category] = t.amount;
+    for (const t of categoryTotals({ expenses, today, period })) spentBy[t.category] = t.amount;
     const list = [];
     let allocated = 0;
     for (const [category, limit] of Object.entries(limits)) {
@@ -841,21 +888,21 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
     return m ? h + '시간 ' + m + '분' : h + '시간';
   }
 
-  function wishSummary({ wishes, today }) {
-    const month = today.slice(0, 7);
+  function wishSummary({ wishes, today, period }) {
+    const pr = periodRange(today, period);
     const r = { waitingCount: 0, waitingTotal: 0, savedMonth: 0, savedCount: 0, boughtMonth: 0 };
     for (const w of wishes) {
       if (w.status === 'waiting') { r.waitingCount++; r.waitingTotal += w.price; continue; }
-      if (!w.decidedDate || w.decidedDate.slice(0, 7) !== month) continue;
+      if (!w.decidedDate || !inRange(w.decidedDate, pr)) continue;
       if (w.status === 'dropped') { r.savedMonth += w.price; r.savedCount++; }
       else if (w.status === 'bought') r.boughtMonth += w.price;
     }
     return r;
   }
 
-  function wishImpact({ limits = {}, expenses, today, category, price }) {
+  function wishImpact({ limits = {}, expenses, today, category, price, period }) {
     const limit = limits[category] > 0 ? limits[category] : 0;
-    const spent = (categoryTotals({ expenses, today }).find(t => t.category === category) || {}).amount || 0;
+    const spent = (categoryTotals({ expenses, today, period }).find(t => t.category === category) || {}).amount || 0;
     if (!limit) return { limit: 0, leftNow: 0, leftAfter: 0, level: 'none' };
     return { limit, leftNow: limit - spent, leftAfter: limit - spent - price, level: levelOf(spent + price, limit) };
   }
@@ -910,37 +957,37 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
     return list;
   }
 
-  function monthDaily({ budget = 0, expenses, today }) {
-    const { y, m, d } = parts(today);
-    const dim = daysInMonth(y, m);
-    const month = today.slice(0, 7);
-    const amounts = new Array(d).fill(0);
+  function monthDaily({ budget = 0, expenses, today, period }) {
+    const r = periodRange(today, period);
+    const amounts = new Array(r.elapsed).fill(0);
     for (const e of expenses) {
-      if (e.date.slice(0, 7) !== month || e.date > today) continue;
-      amounts[parts(e.date).d - 1] += e.amount;
+      if (!inRange(e.date, r) || e.date > today) continue;
+      amounts[dayDiff(r.start, e.date)] += e.amount;
     }
     let cum = 0;
-    const days = amounts.map((amount, i) => { cum += amount; return { date: month + '-' + pad(i + 1), day: i + 1, amount, cum }; });
-    return { days, dim, pacePerDay: budget / dim };
+    const days = amounts.map((amount, i) => { cum += amount; return { date: addDays(r.start, i), day: i + 1, amount, cum }; });
+    return { days, dim: r.days, pacePerDay: budget / r.days, start: r.start, end: r.end, custom: r.custom };
   }
 
   // ───────── 3차: 소비 패턴 ─────────
   const IMPULSE_CATS = ['배달', '쇼핑'];
   const WD = ['월', '화', '수', '목', '금', '토', '일'];
 
-  function patterns({ budget = 0, expenses, today }) {
-    const { y, m, d } = parts(today);
-    const dim = daysInMonth(y, m);
+  const monIdx = (dateStr) => { const { y, m, d } = parts(dateStr); return (new Date(y, m - 1, d).getDay() + 6) % 7; };
+
+  function patterns({ budget = 0, expenses, today, period }) {
+    const r = periodRange(today, period);
+    const d = r.elapsed, dim = r.days;
     const month = today.slice(0, 7);
-    const cur = expenses.filter((e) => e.date.slice(0, 7) === month && e.date <= today);
+    const cur = expenses.filter((e) => inRange(e.date, r) && e.date <= today);
     const spentMonth = cur.reduce((a, e) => a + e.amount, 0);
     const avgPerDay = Math.round(spentMonth / d);
     const projected = Math.round((spentMonth / d) * dim);
 
     const byWeekday = WD.map((label) => ({ label, total: 0, count: 0, days: 0, avg: 0 }));
-    for (let i = 1; i <= d; i++) byWeekday[(new Date(y, m - 1, i).getDay() + 6) % 7].days++;
+    for (let i = 0; i < d; i++) byWeekday[monIdx(addDays(r.start, i))].days++;
     for (const e of cur) {
-      const w = byWeekday[(new Date(y, m - 1, parts(e.date).d).getDay() + 6) % 7];
+      const w = byWeekday[monIdx(e.date)];
       w.total += e.amount; w.count++;
     }
     for (const w of byWeekday) w.avg = w.days ? Math.round(w.total / w.days) : 0;
@@ -953,16 +1000,21 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
     const late = cur.filter((e) => { if (!e.ts) return false; const h = new Date(e.ts).getHours(); return h >= 22 || h < 4; });
     const lateNight = { amount: late.reduce((a, e) => a + e.amount, 0), count: late.length };
 
-    const totals = categoryTotals({ expenses: cur, today });
+    const totals = categoryTotals({ expenses: cur, today, period });
     const top = totals[0] || null;
 
-    const prev = shiftMonth(month, -1);
-    const [py, pm] = prev.split('-').map(Number);
-    const lastDay = Math.min(d, daysInMonth(py, pm));
+    // 비교 대상: 달력 기준이면 지난달 1일~오늘 날짜, 기간 기준이면 바로 앞 같은 길이 기간의 첫 d일
+    let prevStart, prevEnd;
+    if (r.custom) { prevStart = addDays(r.start, -r.days); prevEnd = addDays(prevStart, d - 1); }
+    else {
+      const prev = shiftMonth(month, -1);
+      const [py, pm] = prev.split('-').map(Number);
+      prevStart = prev + '-01'; prevEnd = prev + '-' + pad(Math.min(d, daysInMonth(py, pm)));
+    }
     const prevCat = {};
     let lastSame = 0;
     for (const e of expenses) {
-      if (e.date.slice(0, 7) !== prev || parts(e.date).d > lastDay) continue;
+      if (e.date < prevStart || e.date > prevEnd) continue;
       lastSame += e.amount; addTo(prevCat, e);
     }
     let rise = null;
@@ -972,7 +1024,7 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
     }
 
     return {
-      budget, today, elapsed: d, dim, count: cur.length, spentMonth, avgPerDay, projected,
+      budget, today, elapsed: d, dim, custom: r.custom, start: r.start, end: r.end, count: cur.length, spentMonth, avgPerDay, projected,
       projectedOver: projected - budget, byWeekday, topWeekday, impulse, lateNight, top, totals,
       lastSame, diffLast: spentMonth - lastSame, rise,
     };
@@ -981,12 +1033,15 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
   function won(n) { return Math.round(n).toLocaleString('ko-KR') + '원'; }
 
   function adviceRules(p) {
+    const W = p.custom
+      ? { end: '기간 끝', next: '다음 기간', last: '지난 기간 이맘때', lastSame: '지난 기간 같은 시점', cur: '이번 기간' }
+      : { end: '월말', next: '다음 달', last: '지난달 이맘때', lastSame: '지난달 같은 기간', cur: '이번 달' };
     if (!p.spentMonth) return [{ id: 'empty', tone: 'info', title: '기록이 쌓이면 패턴을 알려드려요', body: '결제할 때마다 바로 기록해보세요. 일주일 정도 모이면 요일·시간대·카테고리별 습관이 보여요.' }];
     const tips = [];
     if (p.budget && p.projectedOver > 0) {
-      tips.push({ id: 'over', tone: 'bad', title: '이 속도면 월말에 ' + won(p.projectedOver) + ' 넘어요',
+      tips.push({ id: 'over', tone: 'bad', title: '이 속도면 ' + W.end + '에 ' + won(p.projectedOver) + ' 넘어요',
         body: p.spentMonth >= p.budget
-          ? '이미 예산을 ' + won(p.spentMonth - p.budget) + ' 넘었어요. 남은 ' + (p.dim - p.elapsed) + '일은 꼭 필요한 지출만 하고, 다음 달 예산을 다시 잡아봐요.'
+          ? '이미 예산을 ' + won(p.spentMonth - p.budget) + ' 넘었어요. 남은 ' + (p.dim - p.elapsed) + '일은 꼭 필요한 지출만 하고, ' + W.next + ' 예산을 다시 잡아봐요.'
           : '하루 평균 ' + won(p.avgPerDay) + '씩 쓰고 있어요. 남은 ' + (p.dim - p.elapsed + 1) + '일 동안 하루 ' + won(Math.floor((p.budget - p.spentMonth) / (p.dim - p.elapsed + 1))) + '에 맞추면 지킬 수 있어요.' });
     }
     if (p.impulse.share >= 30 && p.impulse.amount > 0) {
@@ -998,8 +1053,8 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
         body: '늦은 밤 지출이 ' + won(p.lateNight.amount) + '이에요. 밤에는 앱 장바구니만 담고 결제는 다음 날 하는 규칙을 추천해요.' });
     }
     if (p.rise && p.lastSame > 0 && p.rise.diff >= 10000) {
-      tips.push({ id: 'rise', tone: 'warn', title: '지난달 이맘때보다 ' + p.rise.category + '가 ' + won(p.rise.diff) + ' 늘었어요',
-        body: '지난달 같은 기간 ' + won(p.lastSame) + ' → 이번 달 ' + won(p.spentMonth) + '이에요.' });
+      tips.push({ id: 'rise', tone: 'warn', title: W.last + '보다 ' + p.rise.category + '가 ' + won(p.rise.diff) + ' 늘었어요',
+        body: W.lastSame + ' ' + won(p.lastSame) + ' → ' + W.cur + ' ' + won(p.spentMonth) + '이에요.' });
     }
     if (p.topWeekday && p.count >= 5 && p.topWeekday.total >= 10000 && p.topWeekday.avg >= p.avgPerDay * 1.5) {
       tips.push({ id: 'weekday', tone: 'info', title: p.topWeekday.label + '요일에 가장 많이 써요',
@@ -1007,7 +1062,7 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
     }
     if (!tips.some((t) => t.tone === 'bad' || t.tone === 'warn')) {
       tips.unshift({ id: 'good', tone: 'good', title: '예산 페이스를 잘 지키고 있어요',
-        body: '이 속도면 월말에 ' + won(p.projected) + ' 정도 써서 ' + won(Math.max(0, -p.projectedOver)) + '이 남아요.' });
+        body: '이 속도면 ' + W.end + '에 ' + won(p.projected) + ' 정도 써서 ' + won(Math.max(0, -p.projectedOver)) + '이 남아요.' });
     }
     return tips.slice(0, 3);
   }
@@ -1022,10 +1077,10 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
     return out;
   }
 
-  function budgetChange({ budget, newBudget, limits, expenses, today }) {
+  function budgetChange({ budget, newBudget, limits, expenses, today, period }) {
     const pick = (x) => ({ dailyAllowance: x.dailyAllowance, todayLeft: x.todayLeft, monthLeft: x.monthLeft });
-    const b = summary({ budget, expenses, today });
-    const a = summary({ budget: newBudget, expenses, today });
+    const b = summary({ budget, expenses, today, period });
+    const a = summary({ budget: newBudget, expenses, today, period });
     const limitsTotal = Object.values(limits || {}).reduce((s, v) => s + (Number(v) || 0), 0);
     const limitsFit = limitsTotal <= newBudget;
     return {
@@ -1049,7 +1104,8 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
   const api = { toDateStr, daysLeftInMonth, isValidAmount, summary, categoryTotals,
     envelopes, isValidLimits, WAIT_MS, wishStatus, remainLabel, wishSummary, wishImpact,
     addDays, weekStart, weeklyTotals, monthlyTotals, monthDaily, patterns, adviceRules,
-    scaleLimits, budgetChange, logBudgetChange };
+    scaleLimits, budgetChange, logBudgetChange,
+    MAX_PERIOD_DAYS, dayDiff, periodDays, makePeriod, isValidPeriod, periodRange };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Budget = api;
 })(typeof window !== 'undefined' ? window : globalThis);
@@ -1094,15 +1150,28 @@ function stamp(ts) {
   const t = new Date(ts);
   return t.getMonth() + 1 + "\uC6D4 " + t.getDate() + "\uC77C " + hhmm(ts);
 }
-const EMPTY = { budget: null, limits: {}, changes: [], expenses: [], wishes: [], advice: null };
+const md = (dateStr) => {
+  const [, m, d] = dateStr.split("-").map(Number);
+  return m + "\uC6D4 " + d + "\uC77C";
+};
+const mdShort = (dateStr) => {
+  const [, m, d] = dateStr.split("-").map(Number);
+  return m + "." + d;
+};
+function words(per) {
+  const [, m] = per.start.split("-").map(Number);
+  return per.custom ? { cur: "\uC774\uBC88 \uAE30\uAC04", title: mdShort(per.start) + "~" + mdShort(per.end), end: "\uAE30\uAC04 \uB05D", range: md(per.start) + " ~ " + md(per.end), first: mdShort(per.start), last: mdShort(per.end) } : { cur: "\uC774\uBC88 \uB2EC", title: m + "\uC6D4", end: "\uC6D4\uB9D0", range: md(per.start) + " ~ " + md(per.end), first: "1\uC77C", last: Number(per.end.slice(8)) + "\uC77C" };
+}
+const EMPTY = { budget: null, limits: {}, changes: [], period: null, expenses: [], wishes: [], advice: null };
 function fromDocs(docs) {
-  const st = { budget: null, limits: {}, changes: [], expenses: [], wishes: [], advice: null };
+  const st = { budget: null, limits: {}, changes: [], period: null, expenses: [], wishes: [], advice: null };
   for (const d of docs) {
     const v = d.data() || {};
     if (d.id === "settings") {
       st.budget = typeof v.budget === "number" ? v.budget : null;
       st.limits = v.limits && typeof v.limits === "object" ? { ...v.limits } : {};
       st.changes = Array.isArray(v.changes) ? v.changes : [];
+      st.period = B.isValidPeriod(v.period) ? { start: v.period.start, end: v.period.end } : null;
     } else if (d.id === "advice") {
       if (v && Array.isArray(v.tips)) st.advice = v;
     } else if (v.kind === "expense") {
@@ -1137,7 +1206,7 @@ async function connectDb(setData) {
   const put = (id, body) => col.doc(id).set(body);
   return {
     label: "\uB0B4 \uACC4\uC815\uC5D0 \uC800\uC7A5\uB428",
-    saveSettings: (budget, limits, changes = []) => put("settings", { budget, limits, changes }),
+    saveSettings: (budget, limits, changes = [], period = null) => put("settings", { budget, limits, changes, period: period || null }),
     putExpense: ({ id, ...rest }) => put(id, { kind: "expense", ...rest }),
     removeExpense: (id) => col.doc(id).delete(),
     putWish: ({ id, ...rest }) => put(id, { kind: "wish", ...rest }),
@@ -1166,7 +1235,7 @@ function connectLocal(setData) {
     label: IS_APP ? "\uC774 \uD734\uB300\uD3F0\uC5D0\uB9CC \uC800\uC7A5\uB428 \xB7 \uC124\uC815\uC5D0\uC11C \uBC31\uC5C5\uD560 \uC218 \uC788\uC5B4\uC694" : "\uC774 \uBE0C\uB77C\uC6B0\uC800\uC5D0\uB9CC \uC800\uC7A5\uB428",
     exportAll: () => ({ app: "wallet", v: 1, exportedAt: Date.now(), data: st }),
     importAll: async (d) => commit({ ...EMPTY, ...d }),
-    saveSettings: async (budget, limits, changes = []) => commit({ ...st, budget, limits, changes }),
+    saveSettings: async (budget, limits, changes = [], period = null) => commit({ ...st, budget, limits, changes, period: period || null }),
     putExpense: async (e) => upsert("expenses", e),
     removeExpense: async (id) => commit({ ...st, expenses: st.expenses.filter((x) => x.id !== id) }),
     putWish: async (w) => upsert("wishes", w),
@@ -1241,7 +1310,8 @@ const Ico = {
   gear: /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("circle", { cx: "12", cy: "12", r: "3" }), /* @__PURE__ */ React.createElement("path", { d: "M12 2.8v2.4m0 13.6v2.4M4.2 7.5l2 1.2m11.6 6.6 2 1.2M4.2 16.5l2-1.2m11.6-6.6 2-1.2" })),
   chev: /* @__PURE__ */ React.createElement("path", { d: "m9 6 6 6-6 6" }),
   plus: /* @__PURE__ */ React.createElement("path", { d: "M12 5v14M5 12h14" }),
-  x: /* @__PURE__ */ React.createElement("path", { d: "M7 7l10 10M17 7 7 17" })
+  x: /* @__PURE__ */ React.createElement("path", { d: "M7 7l10 10M17 7 7 17" }),
+  cal: /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("rect", { x: "4", y: "5", width: "16", height: "15", rx: "2.5" }), /* @__PURE__ */ React.createElement("path", { d: "M4 10h16M8.5 3v4m7-4v4" }))
 };
 function Icon({ name, size = 24, stroke = 2 }) {
   return /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 24 24", width: size, height: size, fill: "none", stroke: "currentColor", strokeWidth: stroke, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, Ico[name]);
@@ -1285,26 +1355,27 @@ function Sheet({ open, onClose, title, children, labelId }) {
   if (!open) return null;
   return /* @__PURE__ */ React.createElement("div", { className: "dim", onClick: (e) => e.target === e.currentTarget && onClose() }, /* @__PURE__ */ React.createElement("div", { className: "sheet", role: "dialog", "aria-modal": "true", "aria-labelledby": labelId }, /* @__PURE__ */ React.createElement("div", { className: "grabber", "aria-hidden": "true" }), /* @__PURE__ */ React.createElement("h2", { className: "sheet-title", id: labelId }, title), children));
 }
-function TodayCard({ s, onAdd }) {
+function TodayCard({ s, per, onAdd }) {
+  const W = words(per);
   const over = s.todayLeft < 0;
   const ratio = s.dailyAllowance > 0 ? s.spentToday / s.dailyAllowance : s.spentToday > 0 ? 1 : 0;
   const level = s.monthLeft <= 0 || over ? "bad" : ratio >= 0.8 ? "warn" : "ok";
-  const msg = s.monthLeft <= 0 ? "\uC774\uBC88 \uB2EC \uC608\uC0B0\uC744 \uB2E4 \uC37C\uC5B4\uC694" : over ? fmt(-s.todayLeft) + "\uC6D0 \uB118\uAC8C \uC37C\uC5B4\uC694 \xB7 \uB0B4\uC77C \uC608\uC0B0\uC774 \uC904\uC5B4\uC694" : level === "warn" ? "\uC624\uB298 \uC608\uC0B0\uC758 " + Math.round(ratio * 100) + "%\uB97C \uC37C\uC5B4\uC694" : ratio === 0 ? "\uC544\uC9C1 \uC624\uB298 \uC4F4 \uB3C8\uC774 \uC5C6\uC5B4\uC694" : "\uC624\uB298 \uC608\uC0B0\uC758 " + Math.round(ratio * 100) + "% \uC0AC\uC6A9 \xB7 \uC5EC\uC720 \uC788\uC5B4\uC694";
-  return /* @__PURE__ */ React.createElement("section", { className: cx("card today hero", level === "bad" && "bad"), "aria-live": "polite" }, /* @__PURE__ */ React.createElement("p", { className: "eyebrow" }, "\uC624\uB298 \uC4F8 \uC218 \uC788\uB294 \uB3C8"), /* @__PURE__ */ React.createElement("p", { className: cx("big", over && "over") }, signed(s.todayLeft), /* @__PURE__ */ React.createElement("small", null, "\uC6D0")), /* @__PURE__ */ React.createElement("span", { className: cx("status", level) }, msg), /* @__PURE__ */ React.createElement("div", { className: cx("meter", level) }, /* @__PURE__ */ React.createElement("i", { style: { width: Math.min(100, Math.round(ratio * 100)) + "%" } })), /* @__PURE__ */ React.createElement("div", { className: "meter-scale num" }, /* @__PURE__ */ React.createElement("span", null, "\uC624\uB298 ", fmt(s.spentToday), "\uC6D0 \uC500"), /* @__PURE__ */ React.createElement("span", null, "\uD558\uB8E8 \uC608\uC0B0 ", fmt(s.dailyAllowance), "\uC6D0")), /* @__PURE__ */ React.createElement("dl", { className: "stats" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("dt", null, "\uC774\uBC88 \uB2EC \uB0A8\uC74C"), /* @__PURE__ */ React.createElement("dd", { className: cx(s.monthLeft < 0 && "neg") }, signed(s.monthLeft), "\uC6D0")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("dt", null, "\uC774\uBC88 \uB2EC \uC4F4 \uB3C8"), /* @__PURE__ */ React.createElement("dd", null, fmt(s.spentMonth), "\uC6D0")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("dt", null, "\uB0A8\uC740 \uB0A0"), /* @__PURE__ */ React.createElement("dd", null, s.daysLeft, "\uC77C"))), /* @__PURE__ */ React.createElement("button", { type: "button", className: "btn primary block", onClick: onAdd }, "\uC9C0\uCD9C \uAE30\uB85D\uD558\uAE30"));
+  const msg = s.monthLeft <= 0 ? W.cur + " \uC608\uC0B0\uC744 \uB2E4 \uC37C\uC5B4\uC694" : over ? fmt(-s.todayLeft) + "\uC6D0 \uB118\uAC8C \uC37C\uC5B4\uC694 \xB7 \uB0B4\uC77C \uC608\uC0B0\uC774 \uC904\uC5B4\uC694" : level === "warn" ? "\uC624\uB298 \uC608\uC0B0\uC758 " + Math.round(ratio * 100) + "%\uB97C \uC37C\uC5B4\uC694" : ratio === 0 ? "\uC544\uC9C1 \uC624\uB298 \uC4F4 \uB3C8\uC774 \uC5C6\uC5B4\uC694" : "\uC624\uB298 \uC608\uC0B0\uC758 " + Math.round(ratio * 100) + "% \uC0AC\uC6A9 \xB7 \uC5EC\uC720 \uC788\uC5B4\uC694";
+  return /* @__PURE__ */ React.createElement("section", { className: cx("card today hero", level === "bad" && "bad"), "aria-live": "polite" }, /* @__PURE__ */ React.createElement("p", { className: "eyebrow" }, "\uC624\uB298 \uC4F8 \uC218 \uC788\uB294 \uB3C8"), /* @__PURE__ */ React.createElement("p", { className: cx("big", over && "over") }, signed(s.todayLeft), /* @__PURE__ */ React.createElement("small", null, "\uC6D0")), /* @__PURE__ */ React.createElement("span", { className: cx("status", level) }, msg), /* @__PURE__ */ React.createElement("div", { className: cx("meter", level) }, /* @__PURE__ */ React.createElement("i", { style: { width: Math.min(100, Math.round(ratio * 100)) + "%" } })), /* @__PURE__ */ React.createElement("div", { className: "meter-scale num" }, /* @__PURE__ */ React.createElement("span", null, "\uC624\uB298 ", fmt(s.spentToday), "\uC6D0 \uC500"), /* @__PURE__ */ React.createElement("span", null, "\uD558\uB8E8 \uC608\uC0B0 ", fmt(s.dailyAllowance), "\uC6D0")), /* @__PURE__ */ React.createElement("dl", { className: "stats" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("dt", null, W.cur, " \uB0A8\uC74C"), /* @__PURE__ */ React.createElement("dd", { className: cx(s.monthLeft < 0 && "neg") }, signed(s.monthLeft), "\uC6D0")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("dt", null, W.cur, " \uC4F4 \uB3C8"), /* @__PURE__ */ React.createElement("dd", null, fmt(s.spentMonth), "\uC6D0")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("dt", null, "\uB0A8\uC740 \uB0A0"), /* @__PURE__ */ React.createElement("dd", null, s.daysLeft, "\uC77C"))), /* @__PURE__ */ React.createElement("button", { type: "button", className: "btn primary block", onClick: onAdd }, "\uC9C0\uCD9C \uAE30\uB85D\uD558\uAE30"));
 }
-function PaceCard({ s, budget, today, onEdit }) {
-  const [, m, d] = today.split("-").map(Number);
-  const dim = s.daysLeft + d - 1;
-  const used = pct(s.spentMonth, budget), passed = pct(d, dim);
-  return /* @__PURE__ */ React.createElement("section", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "card-head" }, /* @__PURE__ */ React.createElement("h2", { className: "card-title" }, m, "\uC6D4 \uC608\uC0B0 \uD398\uC774\uC2A4"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "more num", onClick: onEdit, "aria-label": "\uD55C \uB2EC \uC608\uC0B0 " + fmt(budget) + "\uC6D0 \uBCC0\uACBD\uD558\uAE30" }, fmt(budget), "\uC6D0 \xB7 \uBCC0\uACBD", /* @__PURE__ */ React.createElement(Icon, { name: "chev", size: 16 }))), /* @__PURE__ */ React.createElement("div", { className: "pace-line" }, /* @__PURE__ */ React.createElement("span", null, "\uC608\uC0B0 \uC0AC\uC6A9 ", /* @__PURE__ */ React.createElement("b", { className: "num" }, used, "%")), /* @__PURE__ */ React.createElement("span", null, m, "\uC6D4 \uACBD\uACFC ", /* @__PURE__ */ React.createElement("b", { className: "num" }, passed, "%"))), /* @__PURE__ */ React.createElement("div", { className: cx("pace-bar", used >= 100 ? "bad" : used > passed && "ahead"), role: "img", "aria-label": "\uC608\uC0B0 " + used + "% \uC0AC\uC6A9, \uD55C \uB2EC \uC911 " + passed + "% \uACBD\uACFC" }, /* @__PURE__ */ React.createElement("i", { style: { width: Math.min(100, used) + "%" } }), /* @__PURE__ */ React.createElement("s", { style: { left: passed + "%" } })), /* @__PURE__ */ React.createElement("p", { className: "pace-note" }, used >= 100 ? "\uC608\uC0B0\uC744 \uB118\uC5C8\uC5B4\uC694. \uB0A8\uC740 \uB0A0\uC740 \uAF2D \uD544\uC694\uD55C \uAC83\uB9CC \uC368\uC694" : used > passed ? "\uB0A0\uC9DC\uBCF4\uB2E4 \uB3C8\uC774 " + (used - passed) + "%p \uBE68\uB9AC \uC904\uACE0 \uC788\uC5B4\uC694" : "\uB0A0\uC9DC\uBCF4\uB2E4 " + (passed - used) + "%p \uCC9C\uCC9C\uD788 \uC4F0\uB294 \uC911\uC774\uC5D0\uC694"));
+function PaceCard({ s, per, budget, onEdit, onPeriod }) {
+  const W = words(per);
+  const used = pct(s.spentMonth, budget), passed = pct(per.elapsed, per.days);
+  const note = per.state === "ended" ? "\uC815\uD574\uB454 \uAE30\uAC04\uC774 \uB05D\uB098\uC11C \uC9C0\uAE08\uC740 \uB2EC\uB825 \uD55C \uB2EC \uAE30\uC900\uC774\uC5D0\uC694" : per.state === "upcoming" ? "\uC815\uD574\uB454 \uAE30\uAC04\uC774 \uC544\uC9C1 \uC2DC\uC791 \uC804\uC774\uB77C \uC9C0\uAE08\uC740 \uB2EC\uB825 \uD55C \uB2EC \uAE30\uC900\uC774\uC5D0\uC694" : null;
+  return /* @__PURE__ */ React.createElement("section", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "card-head" }, /* @__PURE__ */ React.createElement("h2", { className: "card-title" }, per.custom ? "\uAE30\uAC04" : W.title, " \uC608\uC0B0 \uD398\uC774\uC2A4"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "more num", onClick: onEdit, "aria-label": "\uC608\uC0B0 " + fmt(budget) + "\uC6D0 \uBCC0\uACBD\uD558\uAE30" }, fmt(budget), "\uC6D0 \xB7 \uBCC0\uACBD", /* @__PURE__ */ React.createElement(Icon, { name: "chev", size: 16 }))), /* @__PURE__ */ React.createElement("button", { type: "button", className: cx("period-row", per.custom && "on"), onClick: onPeriod, "aria-label": "\uC608\uC0B0 \uAE30\uAC04 \uBC14\uAFB8\uAE30" }, /* @__PURE__ */ React.createElement("span", { className: "pr-ic", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement(Icon, { name: "cal", size: 16, stroke: 2.2 })), /* @__PURE__ */ React.createElement("span", { className: "pr-main num" }, W.range, /* @__PURE__ */ React.createElement("small", null, per.custom ? per.days + "\uC77C \uC911 " + per.elapsed + "\uC77C\uC9F8" : "\uB9E4\uB2EC 1\uC77C~\uB9D0\uC77C")), /* @__PURE__ */ React.createElement("span", { className: "pr-go" }, per.custom ? "\uAE30\uAC04 \uBC14\uAFB8\uAE30" : "\uAE30\uAC04 \uC815\uD558\uAE30")), note && /* @__PURE__ */ React.createElement("p", { className: "hint warn", style: { marginTop: 10 } }, note, " \xB7 ", /* @__PURE__ */ React.createElement("button", { type: "button", className: "link-btn", onClick: onPeriod }, "\uC0C8 \uAE30\uAC04 \uC815\uD558\uAE30")), /* @__PURE__ */ React.createElement("div", { className: "pace-line" }, /* @__PURE__ */ React.createElement("span", null, "\uC608\uC0B0 \uC0AC\uC6A9 ", /* @__PURE__ */ React.createElement("b", { className: "num" }, used, "%")), /* @__PURE__ */ React.createElement("span", null, per.custom ? "\uAE30\uAC04" : W.title, " \uACBD\uACFC ", /* @__PURE__ */ React.createElement("b", { className: "num" }, passed, "%"))), /* @__PURE__ */ React.createElement("div", { className: cx("pace-bar", used >= 100 ? "bad" : used > passed && "ahead"), role: "img", "aria-label": "\uC608\uC0B0 " + used + "% \uC0AC\uC6A9, \uAE30\uAC04 \uC911 " + passed + "% \uACBD\uACFC" }, /* @__PURE__ */ React.createElement("i", { style: { width: Math.min(100, used) + "%" } }), /* @__PURE__ */ React.createElement("s", { style: { left: passed + "%" } })), /* @__PURE__ */ React.createElement("p", { className: "pace-note" }, used >= 100 ? "\uC608\uC0B0\uC744 \uB118\uC5C8\uC5B4\uC694. \uB0A8\uC740 \uB0A0\uC740 \uAF2D \uD544\uC694\uD55C \uAC83\uB9CC \uC368\uC694" : used > passed ? "\uB0A0\uC9DC\uBCF4\uB2E4 \uB3C8\uC774 " + (used - passed) + "%p \uBE68\uB9AC \uC904\uACE0 \uC788\uC5B4\uC694" : "\uB0A0\uC9DC\uBCF4\uB2E4 " + (passed - used) + "%p \uCC9C\uCC9C\uD788 \uC4F0\uB294 \uC911\uC774\uC5D0\uC694"));
 }
 function EnvelopeCard({ env, onSettings }) {
   const set = env.list.filter((e) => e.level !== "none");
   const loose = env.list.filter((e) => e.level === "none");
   return /* @__PURE__ */ React.createElement("section", { className: "card tight" }, /* @__PURE__ */ React.createElement("div", { className: "card-head" }, /* @__PURE__ */ React.createElement("h2", { className: "card-title" }, "\uCE74\uD14C\uACE0\uB9AC \uBD09\uD22C"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "more", onClick: onSettings }, set.length ? "\uD55C\uB3C4 \uC218\uC815" : "\uBD09\uD22C \uB098\uB204\uAE30", /* @__PURE__ */ React.createElement(Icon, { name: "chev", size: 16 }))), !set.length && !loose.length && /* @__PURE__ */ React.createElement("p", { className: "empty" }, "\uD55C \uB2EC \uC608\uC0B0\uC744 \uC2DD\uBE44\xB7\uCE74\uD398\xB7\uC1FC\uD551 \uBD09\uD22C\uB85C \uB098\uB220\uB450\uBA74, \uBD09\uD22C\uB9C8\uB2E4 \uB0A8\uC740 \uB3C8\uC744 \uBCF4\uC5EC\uC8FC\uACE0 80%\uB97C \uB118\uC73C\uBA74 \uBBF8\uB9AC \uC54C\uB824\uB4DC\uB824\uC694."), /* @__PURE__ */ React.createElement("ul", { className: "list" }, set.map((e) => /* @__PURE__ */ React.createElement("li", { key: e.category, className: "row", style: catVar(e.category) }, /* @__PURE__ */ React.createElement(Avatar, { cat: e.category }), /* @__PURE__ */ React.createElement("div", { className: "row-main" }, /* @__PURE__ */ React.createElement("span", { className: "row-title" }, e.category), /* @__PURE__ */ React.createElement("span", { className: "row-sub num" }, fmt(e.spent), " / ", fmt(e.limit), "\uC6D0")), /* @__PURE__ */ React.createElement("div", { className: "row-end" }, /* @__PURE__ */ React.createElement("span", { className: cx("row-amt", e.left < 0 && "neg") }, e.left < 0 ? fmt(-e.left) + "\uC6D0 \uCD08\uACFC" : fmt(e.left) + "\uC6D0 \uB0A8\uC74C"), /* @__PURE__ */ React.createElement("span", { className: cx("mini-bar", e.level), role: "img", "aria-label": e.pct + "% \uC0AC\uC6A9" }, /* @__PURE__ */ React.createElement("i", { style: { width: Math.min(100, e.pct) + "%" } }))))), loose.map((e) => /* @__PURE__ */ React.createElement("li", { key: e.category, className: "row", style: catVar(e.category) }, /* @__PURE__ */ React.createElement(Avatar, { cat: e.category }), /* @__PURE__ */ React.createElement("div", { className: "row-main" }, /* @__PURE__ */ React.createElement("span", { className: "row-title" }, e.category), /* @__PURE__ */ React.createElement("span", { className: "row-sub" }, "\uBD09\uD22C \uC5C6\uC74C")), /* @__PURE__ */ React.createElement("div", { className: "row-end" }, /* @__PURE__ */ React.createElement("span", { className: "row-amt" }, fmt(e.spent), "\uC6D0"))))), set.length > 0 && /* @__PURE__ */ React.createElement("p", { className: "foot-note num" }, "\uBC30\uBD84 ", fmt(env.allocated), "\uC6D0 \xB7 \uBD09\uD22C \uBC16 ", signed(env.unallocated), "\uC6D0"));
 }
-function Shortcuts({ sum, tip, go }) {
-  return /* @__PURE__ */ React.createElement("section", { className: "card tight" }, /* @__PURE__ */ React.createElement("ul", { className: "list" }, /* @__PURE__ */ React.createElement("li", null, /* @__PURE__ */ React.createElement("button", { type: "button", className: "row btnrow shortcut", onClick: () => go("wish") }, /* @__PURE__ */ React.createElement("span", { className: "avatar", style: { background: "var(--green)" }, "aria-hidden": "true" }, "24"), /* @__PURE__ */ React.createElement("span", { className: "row-main" }, /* @__PURE__ */ React.createElement("span", { className: "row-title" }, "24\uC2DC\uAC04 \uACE0\uBBFC\uD568"), /* @__PURE__ */ React.createElement("span", { className: "row-sub" }, sum.waitingCount ? "\uACE0\uBBFC \uC911 " + sum.waitingCount + "\uAC1C \xB7 " + fmt(sum.waitingTotal) + "\uC6D0" : "\uC0AC\uACE0 \uC2F6\uC740 \uAC8C \uC0DD\uAE30\uBA74 \uBA3C\uC800 \uB123\uC5B4\uB450\uC138\uC694")), /* @__PURE__ */ React.createElement("span", { className: "row-end" }, /* @__PURE__ */ React.createElement("span", { className: "row-amt", style: { color: "var(--green)" } }, fmt(sum.savedMonth), "\uC6D0"), /* @__PURE__ */ React.createElement("span", { className: "row-sub" }, "\uC774\uBC88 \uB2EC \uC544\uB080 \uB3C8")), /* @__PURE__ */ React.createElement("span", { className: "chev" }, /* @__PURE__ */ React.createElement(Icon, { name: "chev", size: 18 })))), /* @__PURE__ */ React.createElement("li", null, /* @__PURE__ */ React.createElement("button", { type: "button", className: "row btnrow shortcut", onClick: () => go("report") }, /* @__PURE__ */ React.createElement("span", { className: "avatar", style: { background: "var(--blue)" }, "aria-hidden": "true" }, /* @__PURE__ */ React.createElement(Icon, { name: "report", size: 20, stroke: 2.4 })), /* @__PURE__ */ React.createElement("span", { className: "row-main" }, /* @__PURE__ */ React.createElement("span", { className: "row-title" }, "\uC18C\uBE44 \uB9AC\uD3EC\uD2B8"), /* @__PURE__ */ React.createElement("span", { className: "row-sub" }, tip ? tip.title : IS_APP ? "\uC8FC\uAC04\xB7\uC6D4\uAC04 \uADF8\uB798\uD504\uC640 \uC18C\uBE44 \uC870\uC5B8" : "\uC8FC\uAC04\xB7\uC6D4\uAC04 \uADF8\uB798\uD504\uC640 AI \uC870\uC5B8")), /* @__PURE__ */ React.createElement("span", { className: "chev" }, /* @__PURE__ */ React.createElement(Icon, { name: "chev", size: 18 }))))));
+function Shortcuts({ sum, tip, go, per }) {
+  return /* @__PURE__ */ React.createElement("section", { className: "card tight" }, /* @__PURE__ */ React.createElement("ul", { className: "list" }, /* @__PURE__ */ React.createElement("li", null, /* @__PURE__ */ React.createElement("button", { type: "button", className: "row btnrow shortcut", onClick: () => go("wish") }, /* @__PURE__ */ React.createElement("span", { className: "avatar", style: { background: "var(--green)" }, "aria-hidden": "true" }, "24"), /* @__PURE__ */ React.createElement("span", { className: "row-main" }, /* @__PURE__ */ React.createElement("span", { className: "row-title" }, "24\uC2DC\uAC04 \uACE0\uBBFC\uD568"), /* @__PURE__ */ React.createElement("span", { className: "row-sub" }, sum.waitingCount ? "\uACE0\uBBFC \uC911 " + sum.waitingCount + "\uAC1C \xB7 " + fmt(sum.waitingTotal) + "\uC6D0" : "\uC0AC\uACE0 \uC2F6\uC740 \uAC8C \uC0DD\uAE30\uBA74 \uBA3C\uC800 \uB123\uC5B4\uB450\uC138\uC694")), /* @__PURE__ */ React.createElement("span", { className: "row-end" }, /* @__PURE__ */ React.createElement("span", { className: "row-amt", style: { color: "var(--green)" } }, fmt(sum.savedMonth), "\uC6D0"), /* @__PURE__ */ React.createElement("span", { className: "row-sub" }, words(per).cur, " \uC544\uB080 \uB3C8")), /* @__PURE__ */ React.createElement("span", { className: "chev" }, /* @__PURE__ */ React.createElement(Icon, { name: "chev", size: 18 })))), /* @__PURE__ */ React.createElement("li", null, /* @__PURE__ */ React.createElement("button", { type: "button", className: "row btnrow shortcut", onClick: () => go("report") }, /* @__PURE__ */ React.createElement("span", { className: "avatar", style: { background: "var(--blue)" }, "aria-hidden": "true" }, /* @__PURE__ */ React.createElement(Icon, { name: "report", size: 20, stroke: 2.4 })), /* @__PURE__ */ React.createElement("span", { className: "row-main" }, /* @__PURE__ */ React.createElement("span", { className: "row-title" }, "\uC18C\uBE44 \uB9AC\uD3EC\uD2B8"), /* @__PURE__ */ React.createElement("span", { className: "row-sub" }, tip ? tip.title : IS_APP ? "\uC8FC\uAC04\xB7\uC6D4\uAC04 \uADF8\uB798\uD504\uC640 \uC18C\uBE44 \uC870\uC5B8" : "\uC8FC\uAC04\xB7\uC6D4\uAC04 \uADF8\uB798\uD504\uC640 AI \uC870\uC5B8")), /* @__PURE__ */ React.createElement("span", { className: "chev" }, /* @__PURE__ */ React.createElement(Icon, { name: "chev", size: 18 }))))));
 }
 function AddSheet({ open, onClose, onAdd, onToWish, envList }) {
   const amt = useMoney();
@@ -1372,10 +1443,11 @@ function WishTab({ wishes, now, data, today, onAdd, onBuy, onDrop, onRemove }) {
   const price = useMoney();
   const [cat, setCat] = useState("\uC1FC\uD551");
   const [err, setErr] = useState("");
-  const sum = B.wishSummary({ wishes, today });
+  const per = B.periodRange(today, data.period);
+  const W = words(per);
+  const sum = B.wishSummary({ wishes, today, period: data.period });
   const waiting = wishes.filter((w) => w.status === "waiting").sort((a, b) => a.ts - b.ts);
-  const month = today.slice(0, 7);
-  const decided = wishes.filter((w) => w.status !== "waiting" && w.decidedDate && w.decidedDate.slice(0, 7) === month).sort((a, b) => b.decidedDate.localeCompare(a.decidedDate));
+  const decided = wishes.filter((w) => w.status !== "waiting" && w.decidedDate && w.decidedDate >= per.start && w.decidedDate <= per.end).sort((a, b) => b.decidedDate.localeCompare(a.decidedDate));
   const submit = async (ev) => {
     ev.preventDefault();
     const n = name.current.value.trim();
@@ -1394,11 +1466,11 @@ function WishTab({ wishes, now, data, today, onAdd, onBuy, onDrop, onRemove }) {
     name.current.value = "";
     price.setText("");
   };
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("h1", { className: "page-title" }, "24\uC2DC\uAC04 \uACE0\uBBFC\uD568"), /* @__PURE__ */ React.createElement("p", { className: "page-sub" }, "\uC0AC\uACE0 \uC2F6\uC73C\uBA74 \uC77C\uB2E8 \uB123\uACE0, \uB0B4\uC77C \uB2E4\uC2DC \uBD10\uC694."), /* @__PURE__ */ React.createElement("div", { className: "grid2" }, /* @__PURE__ */ React.createElement("div", { className: "cols" }, /* @__PURE__ */ React.createElement("section", { className: "card saved-hero" }, /* @__PURE__ */ React.createElement("p", { className: "eyebrow" }, "\uC774\uBC88 \uB2EC \uCC38\uC544\uC11C \uC544\uB080 \uB3C8"), /* @__PURE__ */ React.createElement("p", { className: "big" }, fmt(sum.savedMonth), /* @__PURE__ */ React.createElement("small", null, "\uC6D0")), /* @__PURE__ */ React.createElement("div", { className: "saved-meta" }, /* @__PURE__ */ React.createElement("span", { className: "pill good" }, "\uC548 \uC0B0 \uBB3C\uAC74 ", sum.savedCount, "\uAC1C"), /* @__PURE__ */ React.createElement("span", { className: "pill" }, "\uACE0\uBBFC \uC911 ", sum.waitingCount, "\uAC1C \xB7 ", fmt(sum.waitingTotal), "\uC6D0"), sum.boughtMonth > 0 && /* @__PURE__ */ React.createElement("span", { className: "pill blue" }, "\uACE0\uBBFC \uD6C4 \uAD6C\uB9E4 ", fmt(sum.boughtMonth), "\uC6D0"))), /* @__PURE__ */ React.createElement("section", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "card-head" }, /* @__PURE__ */ React.createElement("h2", { className: "card-title" }, "\uC0C8\uB85C \uACE0\uBBFC\uD558\uAE30")), /* @__PURE__ */ React.createElement("form", { className: "wish-form", onSubmit: submit, noValidate: true }, /* @__PURE__ */ React.createElement("input", { id: "wishName", ref: name, className: "field-in", maxLength: 40, placeholder: "\uC0AC\uACE0 \uC2F6\uC740 \uAC83 (\uC608: \uBB34\uC120 \uC774\uC5B4\uD3F0)", "aria-label": "\uC0AC\uACE0 \uC2F6\uC740 \uAC83" }), /* @__PURE__ */ React.createElement("div", { className: "wish-form-row" }, /* @__PURE__ */ React.createElement("label", { className: "money-field", htmlFor: "wishPrice" }, /* @__PURE__ */ React.createElement("input", { id: "wishPrice", inputMode: "numeric", placeholder: "\uAC00\uACA9", value: price.text, onChange: price.onChange, "aria-label": "\uAC00\uACA9" }), /* @__PURE__ */ React.createElement("em", null, "\uC6D0")), /* @__PURE__ */ React.createElement("select", { id: "wishCat", className: "field-in select", value: cat, onChange: (e) => setCat(e.target.value), "aria-label": "\uCE74\uD14C\uACE0\uB9AC" }, CATS.map((c) => /* @__PURE__ */ React.createElement("option", { key: c }, c)))), /* @__PURE__ */ React.createElement("p", { className: "err", role: "alert", style: { marginTop: 0, minHeight: err ? 20 : 0 } }, err), /* @__PURE__ */ React.createElement("button", { type: "submit", className: "btn primary block" }, "24\uC2DC\uAC04 \uACE0\uBBFC \uC2DC\uC791")))), /* @__PURE__ */ React.createElement("div", { className: "cols" }, /* @__PURE__ */ React.createElement("section", { className: "card tight" }, /* @__PURE__ */ React.createElement("div", { className: "card-head" }, /* @__PURE__ */ React.createElement("h2", { className: "card-title" }, "\uACE0\uBBFC \uC911"), /* @__PURE__ */ React.createElement("span", { className: "more" }, waiting.length, "\uAC1C")), !waiting.length && /* @__PURE__ */ React.createElement("p", { className: "empty" }, "\uACE0\uBBFC \uC911\uC778 \uBB3C\uAC74\uC774 \uC5C6\uC5B4\uC694. \uC7A5\uBC14\uAD6C\uB2C8\uC5D0 \uB2F4\uACE0 \uC2F6\uC740 \uAC8C \uC0DD\uAE30\uBA74 \uBA3C\uC800 \uC5EC\uAE30\uC5D0 \uC801\uC5B4\uBCF4\uC138\uC694."), waiting.map((w) => {
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("h1", { className: "page-title" }, "24\uC2DC\uAC04 \uACE0\uBBFC\uD568"), /* @__PURE__ */ React.createElement("p", { className: "page-sub" }, "\uC0AC\uACE0 \uC2F6\uC73C\uBA74 \uC77C\uB2E8 \uB123\uACE0, \uB0B4\uC77C \uB2E4\uC2DC \uBD10\uC694."), /* @__PURE__ */ React.createElement("div", { className: "grid2" }, /* @__PURE__ */ React.createElement("div", { className: "cols" }, /* @__PURE__ */ React.createElement("section", { className: "card saved-hero" }, /* @__PURE__ */ React.createElement("p", { className: "eyebrow" }, W.cur, " \uCC38\uC544\uC11C \uC544\uB080 \uB3C8"), /* @__PURE__ */ React.createElement("p", { className: "big" }, fmt(sum.savedMonth), /* @__PURE__ */ React.createElement("small", null, "\uC6D0")), /* @__PURE__ */ React.createElement("div", { className: "saved-meta" }, /* @__PURE__ */ React.createElement("span", { className: "pill good" }, "\uC548 \uC0B0 \uBB3C\uAC74 ", sum.savedCount, "\uAC1C"), /* @__PURE__ */ React.createElement("span", { className: "pill" }, "\uACE0\uBBFC \uC911 ", sum.waitingCount, "\uAC1C \xB7 ", fmt(sum.waitingTotal), "\uC6D0"), sum.boughtMonth > 0 && /* @__PURE__ */ React.createElement("span", { className: "pill blue" }, "\uACE0\uBBFC \uD6C4 \uAD6C\uB9E4 ", fmt(sum.boughtMonth), "\uC6D0"))), /* @__PURE__ */ React.createElement("section", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "card-head" }, /* @__PURE__ */ React.createElement("h2", { className: "card-title" }, "\uC0C8\uB85C \uACE0\uBBFC\uD558\uAE30")), /* @__PURE__ */ React.createElement("form", { className: "wish-form", onSubmit: submit, noValidate: true }, /* @__PURE__ */ React.createElement("input", { id: "wishName", ref: name, className: "field-in", maxLength: 40, placeholder: "\uC0AC\uACE0 \uC2F6\uC740 \uAC83 (\uC608: \uBB34\uC120 \uC774\uC5B4\uD3F0)", "aria-label": "\uC0AC\uACE0 \uC2F6\uC740 \uAC83" }), /* @__PURE__ */ React.createElement("div", { className: "wish-form-row" }, /* @__PURE__ */ React.createElement("label", { className: "money-field", htmlFor: "wishPrice" }, /* @__PURE__ */ React.createElement("input", { id: "wishPrice", inputMode: "numeric", placeholder: "\uAC00\uACA9", value: price.text, onChange: price.onChange, "aria-label": "\uAC00\uACA9" }), /* @__PURE__ */ React.createElement("em", null, "\uC6D0")), /* @__PURE__ */ React.createElement("select", { id: "wishCat", className: "field-in select", value: cat, onChange: (e) => setCat(e.target.value), "aria-label": "\uCE74\uD14C\uACE0\uB9AC" }, CATS.map((c) => /* @__PURE__ */ React.createElement("option", { key: c }, c)))), /* @__PURE__ */ React.createElement("p", { className: "err", role: "alert", style: { marginTop: 0, minHeight: err ? 20 : 0 } }, err), /* @__PURE__ */ React.createElement("button", { type: "submit", className: "btn primary block" }, "24\uC2DC\uAC04 \uACE0\uBBFC \uC2DC\uC791")))), /* @__PURE__ */ React.createElement("div", { className: "cols" }, /* @__PURE__ */ React.createElement("section", { className: "card tight" }, /* @__PURE__ */ React.createElement("div", { className: "card-head" }, /* @__PURE__ */ React.createElement("h2", { className: "card-title" }, "\uACE0\uBBFC \uC911"), /* @__PURE__ */ React.createElement("span", { className: "more" }, waiting.length, "\uAC1C")), !waiting.length && /* @__PURE__ */ React.createElement("p", { className: "empty" }, "\uACE0\uBBFC \uC911\uC778 \uBB3C\uAC74\uC774 \uC5C6\uC5B4\uC694. \uC7A5\uBC14\uAD6C\uB2C8\uC5D0 \uB2F4\uACE0 \uC2F6\uC740 \uAC8C \uC0DD\uAE30\uBA74 \uBA3C\uC800 \uC5EC\uAE30\uC5D0 \uC801\uC5B4\uBCF4\uC138\uC694."), waiting.map((w) => {
     const st = B.wishStatus(w, now);
-    const imp = B.wishImpact({ limits: data.limits, expenses: data.expenses, today, category: w.category, price: w.price });
+    const imp = B.wishImpact({ limits: data.limits, expenses: data.expenses, today, category: w.category, price: w.price, period: data.period });
     return /* @__PURE__ */ React.createElement("div", { key: w.id, className: cx("wish-row", st.ready && "ready") }, /* @__PURE__ */ React.createElement(Ring, { progress: 1 - st.msLeft / B.WAIT_MS }, st.ready ? "\u2713" : Math.ceil(st.msLeft / 36e5) + "h"), /* @__PURE__ */ React.createElement("div", { className: "row-main" }, /* @__PURE__ */ React.createElement("span", { className: "row-title" }, w.name), /* @__PURE__ */ React.createElement("span", { className: "row-sub num" }, fmt(w.price), "\uC6D0 \xB7 ", st.ready ? "\uC774\uC81C \uACB0\uC815\uD560 \uC218 \uC788\uC5B4\uC694" : B.remainLabel(st.msLeft) + " \uB0A8\uC74C"), imp.level !== "none" && /* @__PURE__ */ React.createElement("span", { className: cx("row-sub", imp.leftAfter < 0 && "neg") }, "\uC0AC\uBA74 ", w.category, " \uBD09\uD22C ", signed(imp.leftAfter), "\uC6D0")), /* @__PURE__ */ React.createElement("button", { type: "button", className: "del", onClick: () => onRemove(w), "aria-label": w.name + " \uACE0\uBBFC\uD568\uC5D0\uC11C \uC9C0\uC6B0\uAE30", title: "\uACE0\uBBFC\uD568\uC5D0\uC11C \uC9C0\uC6B0\uAE30 (\uC544\uB080 \uB3C8\uC5D0 \uC548 \uB4E4\uC5B4\uAC00\uC694)" }, /* @__PURE__ */ React.createElement(Icon, { name: "x", size: 16 })), /* @__PURE__ */ React.createElement("div", { className: "wish-acts" }, /* @__PURE__ */ React.createElement("button", { type: "button", className: "btn grey sm", onClick: () => onDrop(w) }, "\uC548 \uC0B4\uB798\uC694"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "btn primary sm", disabled: !st.ready, onClick: () => onBuy(w), title: st.ready ? "" : "24\uC2DC\uAC04\uC774 \uC9C0\uB098\uC57C \uC0B4 \uC218 \uC788\uC5B4\uC694" }, st.ready ? "\uC0B4\uAC8C\uC694" : "\uC7A0\uAE40")));
-  })), decided.length > 0 && /* @__PURE__ */ React.createElement("section", { className: "card tight" }, /* @__PURE__ */ React.createElement("div", { className: "card-head" }, /* @__PURE__ */ React.createElement("h2", { className: "card-title" }, "\uC774\uBC88 \uB2EC \uACB0\uC815")), /* @__PURE__ */ React.createElement("ul", { className: "list" }, decided.map((w) => /* @__PURE__ */ React.createElement("li", { key: w.id, className: "row" }, /* @__PURE__ */ React.createElement(Avatar, { cat: w.category, soft: w.status === "dropped" }), /* @__PURE__ */ React.createElement("div", { className: "row-main" }, /* @__PURE__ */ React.createElement("span", { className: "row-title" }, w.name), /* @__PURE__ */ React.createElement("span", { className: "row-sub" }, w.status === "dropped" ? "\uC548 \uC0AC\uAE30\uB85C \uD588\uC5B4\uC694" : "\uACE0\uBBFC \uD6C4 \uC0C0\uC5B4\uC694")), /* @__PURE__ */ React.createElement("span", { className: cx("row-amt", w.status === "dropped" && "blue"), style: w.status === "dropped" ? { color: "var(--green)" } : null }, w.status === "dropped" ? "+" : "\u2212", fmt(w.price), "\uC6D0"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "del", onClick: () => onRemove(w), "aria-label": w.name + " \uACB0\uC815 \uAE30\uB85D \uC9C0\uC6B0\uAE30" }, /* @__PURE__ */ React.createElement(Icon, { name: "x", size: 16 })))))))));
+  })), decided.length > 0 && /* @__PURE__ */ React.createElement("section", { className: "card tight" }, /* @__PURE__ */ React.createElement("div", { className: "card-head" }, /* @__PURE__ */ React.createElement("h2", { className: "card-title" }, W.cur, " \uACB0\uC815")), /* @__PURE__ */ React.createElement("ul", { className: "list" }, decided.map((w) => /* @__PURE__ */ React.createElement("li", { key: w.id, className: "row" }, /* @__PURE__ */ React.createElement(Avatar, { cat: w.category, soft: w.status === "dropped" }), /* @__PURE__ */ React.createElement("div", { className: "row-main" }, /* @__PURE__ */ React.createElement("span", { className: "row-title" }, w.name), /* @__PURE__ */ React.createElement("span", { className: "row-sub" }, w.status === "dropped" ? "\uC548 \uC0AC\uAE30\uB85C \uD588\uC5B4\uC694" : "\uACE0\uBBFC \uD6C4 \uC0C0\uC5B4\uC694")), /* @__PURE__ */ React.createElement("span", { className: cx("row-amt", w.status === "dropped" && "blue"), style: w.status === "dropped" ? { color: "var(--green)" } : null }, w.status === "dropped" ? "+" : "\u2212", fmt(w.price), "\uC6D0"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "del", onClick: () => onRemove(w), "aria-label": w.name + " \uACB0\uC815 \uAE30\uB85D \uC9C0\uC6B0\uAE30" }, /* @__PURE__ */ React.createElement(Icon, { name: "x", size: 16 })))))))));
 }
 function CatBreakdown({ byCat }) {
   const rows = Object.entries(byCat).map(([category, amount]) => ({ category, amount })).sort((a, b) => b.amount - a.amount);
@@ -1424,30 +1496,30 @@ function PeriodCard({ expenses, today }) {
   const unit = mode === "week" ? "\uC8FC" : "\uB2EC";
   return /* @__PURE__ */ React.createElement("section", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "seg", role: "group", "aria-label": "\uAE30\uAC04" }, /* @__PURE__ */ React.createElement("button", { type: "button", "aria-pressed": mode === "week", onClick: () => setMode("week") }, "\uC8FC\uAC04"), /* @__PURE__ */ React.createElement("button", { type: "button", "aria-pressed": mode === "month", onClick: () => setMode("month") }, "\uC6D4\uAC04")), /* @__PURE__ */ React.createElement("div", { className: "report-head" }, /* @__PURE__ */ React.createElement("p", { className: "eyebrow" }, cur.name, " \uC4F4 \uB3C8"), /* @__PURE__ */ React.createElement("p", { className: "big" }, fmt(cur.total), /* @__PURE__ */ React.createElement("small", null, "\uC6D0")), prev && /* @__PURE__ */ React.createElement("p", { className: "delta" }, diff === 0 ? "\uC9C0\uB09C" + unit + "\uACFC \uAC19\uC544\uC694" : /* @__PURE__ */ React.createElement(React.Fragment, null, "\uC9C0\uB09C", unit, "\uBCF4\uB2E4 ", /* @__PURE__ */ React.createElement("b", { className: diff > 0 ? "up" : "down" }, fmt(Math.abs(diff)), "\uC6D0 ", diff > 0 ? "\uB354" : "\uB35C"), " \uC37C\uC5B4\uC694"))), /* @__PURE__ */ React.createElement("div", { className: "bars", role: "group", "aria-label": (mode === "week" ? "\uC8FC\uBCC4" : "\uC6D4\uBCC4") + " \uC9C0\uCD9C \uADF8\uB798\uD504" }, items.map((x, k) => /* @__PURE__ */ React.createElement("button", { key: x.key, type: "button", className: "bar", "aria-pressed": k === i, onClick: () => setSel(k), "aria-label": x.name + " " + fmt(x.total) + "\uC6D0" }, /* @__PURE__ */ React.createElement("span", { className: "v" }, short(x.total)), /* @__PURE__ */ React.createElement("span", { className: "col", style: { height: Math.max(3, x.total / max * 120) + "px" } }), /* @__PURE__ */ React.createElement("span", { className: "k" }, x.label)))), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 22 } }, /* @__PURE__ */ React.createElement("span", { className: "label" }, cur.name, " \uCE74\uD14C\uACE0\uB9AC"), /* @__PURE__ */ React.createElement(CatBreakdown, { byCat: cur.byCat })));
 }
-function FlowCard({ expenses, budget, today, p }) {
-  const md = B.monthDaily({ budget, expenses, today });
+function FlowCard({ expenses, budget, today, p, period }) {
+  const md2 = B.monthDaily({ budget, expenses, today, period });
+  const PW = words(md2);
   const W = 340, H = 190, L = 8, R = 46, T = 14, Bt = 24;
-  const last = md.days[md.days.length - 1];
+  const last = md2.days[md2.days.length - 1];
   const projEnd = p.projected;
   const maxY = Math.max(budget, projEnd, last ? last.cum : 0, 1) * 1.08;
-  const x = (day) => L + day / md.dim * (W - L - R);
+  const x = (day) => L + day / md2.dim * (W - L - R);
   const y = (v) => T + (1 - v / maxY) * (H - T - Bt);
-  const line = [[0, 0], ...md.days.map((d) => [d.day, d.cum])].map(([a, b]) => x(a).toFixed(1) + "," + y(b).toFixed(1)).join(" ");
+  const line = [[0, 0], ...md2.days.map((d) => [d.day, d.cum])].map(([a, b]) => x(a).toFixed(1) + "," + y(b).toFixed(1)).join(" ");
   const area = "M" + x(0) + "," + y(0) + " L" + line.replace(/ /g, " L") + " L" + x(last.day) + "," + y(0) + " Z";
-  const [, m] = today.split("-").map(Number);
-  const over = last.cum > last.day * md.pacePerDay;
-  return /* @__PURE__ */ React.createElement("section", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "card-head" }, /* @__PURE__ */ React.createElement("h2", { className: "card-title" }, m, "\uC6D4 \uB204\uC801 \uC9C0\uCD9C"), /* @__PURE__ */ React.createElement("span", { className: cx("pill", over ? "warn" : "blue") }, over ? "\uC608\uC0B0 \uC18D\uB3C4\uBCF4\uB2E4 \uBE60\uB984" : "\uC608\uC0B0 \uC18D\uB3C4 \uC548\uCABD")), /* @__PURE__ */ React.createElement("div", { className: "chart-wrap" }, /* @__PURE__ */ React.createElement("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": m + "\uC6D4 1\uC77C\uBD80\uD130 \uC624\uB298\uAE4C\uC9C0 \uB204\uC801 " + fmt(last.cum) + "\uC6D0, \uC608\uC0B0 " + fmt(budget) + "\uC6D0" }, /* @__PURE__ */ React.createElement("defs", null, /* @__PURE__ */ React.createElement("linearGradient", { id: "flowFill", x1: "0", x2: "0", y1: "0", y2: "1" }, /* @__PURE__ */ React.createElement("stop", { offset: "0", stopColor: "var(--blue)", stopOpacity: ".22" }), /* @__PURE__ */ React.createElement("stop", { offset: "1", stopColor: "var(--blue)", stopOpacity: "0" }))), /* @__PURE__ */ React.createElement("line", { x1: L, x2: W - R, y1: y(0), y2: y(0), stroke: "var(--line)", strokeWidth: "1" }), /* @__PURE__ */ React.createElement("line", { x1: L, x2: W - R, y1: y(budget), y2: y(budget), stroke: "var(--line)", strokeWidth: "1", strokeDasharray: "2 3" }), /* @__PURE__ */ React.createElement("text", { x: W - R + 6, y: y(budget) + 4, className: "ax" }, "\uC608\uC0B0"), /* @__PURE__ */ React.createElement("text", { x: W - R + 6, y: y(budget) + 17, className: "ax" }, short(budget)), /* @__PURE__ */ React.createElement("line", { x1: x(0), y1: y(0), x2: x(md.dim), y2: y(budget), stroke: "var(--faint)", strokeWidth: "1.5", strokeDasharray: "4 3", fill: "none" }), /* @__PURE__ */ React.createElement("line", { x1: x(last.day), y1: y(last.cum), x2: x(md.dim), y2: y(projEnd), stroke: "var(--blue)", strokeOpacity: ".5", strokeWidth: "2", strokeDasharray: "4 4", fill: "none" }), /* @__PURE__ */ React.createElement("path", { d: area, fill: "url(#flowFill)" }), /* @__PURE__ */ React.createElement("polyline", { points: line, fill: "none", stroke: "var(--blue)", strokeWidth: "2.5", strokeLinejoin: "round", strokeLinecap: "round" }), /* @__PURE__ */ React.createElement("circle", { cx: x(last.day), cy: y(last.cum), r: "4.5", fill: "var(--blue)", stroke: "var(--card)", strokeWidth: "2" }), /* @__PURE__ */ React.createElement("text", { x: x(md.dim) + 6, y: y(projEnd) + 4, className: cx("ax", "strong") }, short(projEnd)), /* @__PURE__ */ React.createElement("text", { x: x(0), y: H - 6, className: "ax" }, "1\uC77C"), /* @__PURE__ */ React.createElement("text", { x: x(last.day), y: H - 6, className: "ax strong", textAnchor: "middle" }, "\uC624\uB298"), md.dim - last.day > 4 && /* @__PURE__ */ React.createElement("text", { x: x(md.dim), y: H - 6, className: "ax", textAnchor: "end" }, md.dim, "\uC77C"))), /* @__PURE__ */ React.createElement("div", { className: "legend" }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("i", null), "\uC4F4 \uB3C8 \uB204\uC801 ", fmt(last.cum), "\uC6D0"), /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("i", { className: "dash" }), "\uC608\uC0B0 \uC18D\uB3C4"), /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("i", { className: "proj" }), "\uC774\uB300\uB85C\uBA74 \uC6D4\uB9D0 ", fmt(projEnd), "\uC6D0")));
+  const over = last.cum > last.day * md2.pacePerDay;
+  return /* @__PURE__ */ React.createElement("section", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "card-head" }, /* @__PURE__ */ React.createElement("h2", { className: "card-title" }, PW.title, " \uB204\uC801 \uC9C0\uCD9C"), /* @__PURE__ */ React.createElement("span", { className: cx("pill", over ? "warn" : "blue") }, over ? "\uC608\uC0B0 \uC18D\uB3C4\uBCF4\uB2E4 \uBE60\uB984" : "\uC608\uC0B0 \uC18D\uB3C4 \uC548\uCABD")), /* @__PURE__ */ React.createElement("div", { className: "chart-wrap" }, /* @__PURE__ */ React.createElement("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": PW.first + "\uBD80\uD130 \uC624\uB298\uAE4C\uC9C0 \uB204\uC801 " + fmt(last.cum) + "\uC6D0, \uC608\uC0B0 " + fmt(budget) + "\uC6D0" }, /* @__PURE__ */ React.createElement("defs", null, /* @__PURE__ */ React.createElement("linearGradient", { id: "flowFill", x1: "0", x2: "0", y1: "0", y2: "1" }, /* @__PURE__ */ React.createElement("stop", { offset: "0", stopColor: "var(--blue)", stopOpacity: ".22" }), /* @__PURE__ */ React.createElement("stop", { offset: "1", stopColor: "var(--blue)", stopOpacity: "0" }))), /* @__PURE__ */ React.createElement("line", { x1: L, x2: W - R, y1: y(0), y2: y(0), stroke: "var(--line)", strokeWidth: "1" }), /* @__PURE__ */ React.createElement("line", { x1: L, x2: W - R, y1: y(budget), y2: y(budget), stroke: "var(--line)", strokeWidth: "1", strokeDasharray: "2 3" }), /* @__PURE__ */ React.createElement("text", { x: W - R + 6, y: y(budget) + 4, className: "ax" }, "\uC608\uC0B0"), /* @__PURE__ */ React.createElement("text", { x: W - R + 6, y: y(budget) + 17, className: "ax" }, short(budget)), /* @__PURE__ */ React.createElement("line", { x1: x(0), y1: y(0), x2: x(md2.dim), y2: y(budget), stroke: "var(--faint)", strokeWidth: "1.5", strokeDasharray: "4 3", fill: "none" }), /* @__PURE__ */ React.createElement("line", { x1: x(last.day), y1: y(last.cum), x2: x(md2.dim), y2: y(projEnd), stroke: "var(--blue)", strokeOpacity: ".5", strokeWidth: "2", strokeDasharray: "4 4", fill: "none" }), /* @__PURE__ */ React.createElement("path", { d: area, fill: "url(#flowFill)" }), /* @__PURE__ */ React.createElement("polyline", { points: line, fill: "none", stroke: "var(--blue)", strokeWidth: "2.5", strokeLinejoin: "round", strokeLinecap: "round" }), /* @__PURE__ */ React.createElement("circle", { cx: x(last.day), cy: y(last.cum), r: "4.5", fill: "var(--blue)", stroke: "var(--card)", strokeWidth: "2" }), /* @__PURE__ */ React.createElement("text", { x: x(md2.dim) + 6, y: y(projEnd) + 4, className: cx("ax", "strong") }, short(projEnd)), /* @__PURE__ */ React.createElement("text", { x: x(0), y: H - 6, className: "ax" }, PW.first), /* @__PURE__ */ React.createElement("text", { x: x(last.day), y: H - 6, className: "ax strong", textAnchor: "middle" }, "\uC624\uB298"), md2.dim - last.day > 4 && /* @__PURE__ */ React.createElement("text", { x: x(md2.dim), y: H - 6, className: "ax", textAnchor: "end" }, PW.last))), /* @__PURE__ */ React.createElement("div", { className: "legend" }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("i", null), "\uC4F4 \uB3C8 \uB204\uC801 ", fmt(last.cum), "\uC6D0"), /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("i", { className: "dash" }), "\uC608\uC0B0 \uC18D\uB3C4"), /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("i", { className: "proj" }), "\uC774\uB300\uB85C\uBA74 ", PW.end, " ", fmt(projEnd), "\uC6D0")));
 }
 function PatternCard({ p }) {
   const maxWd = Math.max(1, ...p.byWeekday.map((w) => w.avg));
-  return /* @__PURE__ */ React.createElement("section", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "card-head" }, /* @__PURE__ */ React.createElement("h2", { className: "card-title" }, "\uC774\uBC88 \uB2EC \uC18C\uBE44 \uD328\uD134"), /* @__PURE__ */ React.createElement("span", { className: "more num" }, p.count, "\uAC74")), /* @__PURE__ */ React.createElement("div", { className: "facts" }, /* @__PURE__ */ React.createElement("div", { className: "fact" }, /* @__PURE__ */ React.createElement("span", { className: "k" }, "\uD558\uB8E8 \uD3C9\uADE0"), /* @__PURE__ */ React.createElement("span", { className: cx("v", p.projectedOver > 0 && "bad") }, fmt(p.avgPerDay), "\uC6D0"), /* @__PURE__ */ React.createElement("span", { className: "s" }, p.projectedOver > 0 ? "\uC6D4\uB9D0 " + fmt(p.projectedOver) + "\uC6D0 \uCD08\uACFC \uC608\uC0C1" : "\uC6D4\uB9D0 " + fmt(-p.projectedOver) + "\uC6D0 \uB0A8\uC744 \uC608\uC0C1")), /* @__PURE__ */ React.createElement("div", { className: "fact" }, /* @__PURE__ */ React.createElement("span", { className: "k" }, "\uBC30\uB2EC\xB7\uC1FC\uD551 \uBE44\uC911"), /* @__PURE__ */ React.createElement("span", { className: cx("v", p.impulse.share >= 30 ? "warn" : "good") }, p.impulse.share, "%"), /* @__PURE__ */ React.createElement("span", { className: "s" }, p.impulse.count, "\uBC88 \xB7 ", fmt(p.impulse.amount), "\uC6D0")), /* @__PURE__ */ React.createElement("div", { className: "fact" }, /* @__PURE__ */ React.createElement("span", { className: "k" }, "\uBC24 10\uC2DC \uC774\uD6C4 \uACB0\uC81C"), /* @__PURE__ */ React.createElement("span", { className: cx("v", p.lateNight.count >= 2 && "warn") }, p.lateNight.count, "\uBC88"), /* @__PURE__ */ React.createElement("span", { className: "s" }, fmt(p.lateNight.amount), "\uC6D0")), /* @__PURE__ */ React.createElement("div", { className: "fact" }, /* @__PURE__ */ React.createElement("span", { className: "k" }, "\uC9C0\uB09C\uB2EC \uAC19\uC740 \uAE30\uAC04 \uB300\uBE44"), /* @__PURE__ */ React.createElement("span", { className: cx("v", p.lastSame > 0 && (p.diffLast > 0 ? "bad" : "good")) }, p.lastSame > 0 ? (p.diffLast > 0 ? "+" : "\u2212") + fmt(Math.abs(p.diffLast)) + "\uC6D0" : "\u2014"), /* @__PURE__ */ React.createElement("span", { className: "s" }, p.lastSame > 0 ? "\uC9C0\uB09C\uB2EC 1~" + p.elapsed + "\uC77C " + fmt(p.lastSame) + "\uC6D0" : "\uC9C0\uB09C\uB2EC \uAE30\uB85D\uC774 \uC5C6\uC5B4\uC694"))), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 20 } }, /* @__PURE__ */ React.createElement("span", { className: "label" }, "\uC694\uC77C\uBCC4 \uD558\uB8E8 \uD3C9\uADE0", p.topWeekday ? " \xB7 " + p.topWeekday.label + "\uC694\uC77C\uC774 \uAC00\uC7A5 \uB9CE\uC544\uC694" : ""), /* @__PURE__ */ React.createElement("div", { className: "wd", role: "img", "aria-label": p.byWeekday.map((w) => w.label + " " + fmt(w.avg) + "\uC6D0").join(", ") }, p.byWeekday.map((w) => /* @__PURE__ */ React.createElement("div", { key: w.label, className: cx(p.topWeekday && p.topWeekday.label === w.label && "top") }, /* @__PURE__ */ React.createElement("i", { style: { height: Math.max(3, w.avg / maxWd * 70) + "px" } }), /* @__PURE__ */ React.createElement("span", null, w.label))))));
+  return /* @__PURE__ */ React.createElement("section", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "card-head" }, /* @__PURE__ */ React.createElement("h2", { className: "card-title" }, p.custom ? "\uC774\uBC88 \uAE30\uAC04" : "\uC774\uBC88 \uB2EC", " \uC18C\uBE44 \uD328\uD134"), /* @__PURE__ */ React.createElement("span", { className: "more num" }, p.count, "\uAC74")), /* @__PURE__ */ React.createElement("div", { className: "facts" }, /* @__PURE__ */ React.createElement("div", { className: "fact" }, /* @__PURE__ */ React.createElement("span", { className: "k" }, "\uD558\uB8E8 \uD3C9\uADE0"), /* @__PURE__ */ React.createElement("span", { className: cx("v", p.projectedOver > 0 && "bad") }, fmt(p.avgPerDay), "\uC6D0"), /* @__PURE__ */ React.createElement("span", { className: "s" }, (p.custom ? "\uAE30\uAC04 \uB05D " : "\uC6D4\uB9D0 ") + (p.projectedOver > 0 ? fmt(p.projectedOver) + "\uC6D0 \uCD08\uACFC \uC608\uC0C1" : fmt(-p.projectedOver) + "\uC6D0 \uB0A8\uC744 \uC608\uC0C1"))), /* @__PURE__ */ React.createElement("div", { className: "fact" }, /* @__PURE__ */ React.createElement("span", { className: "k" }, "\uBC30\uB2EC\xB7\uC1FC\uD551 \uBE44\uC911"), /* @__PURE__ */ React.createElement("span", { className: cx("v", p.impulse.share >= 30 ? "warn" : "good") }, p.impulse.share, "%"), /* @__PURE__ */ React.createElement("span", { className: "s" }, p.impulse.count, "\uBC88 \xB7 ", fmt(p.impulse.amount), "\uC6D0")), /* @__PURE__ */ React.createElement("div", { className: "fact" }, /* @__PURE__ */ React.createElement("span", { className: "k" }, "\uBC24 10\uC2DC \uC774\uD6C4 \uACB0\uC81C"), /* @__PURE__ */ React.createElement("span", { className: cx("v", p.lateNight.count >= 2 && "warn") }, p.lateNight.count, "\uBC88"), /* @__PURE__ */ React.createElement("span", { className: "s" }, fmt(p.lateNight.amount), "\uC6D0")), /* @__PURE__ */ React.createElement("div", { className: "fact" }, /* @__PURE__ */ React.createElement("span", { className: "k" }, "\uC9C0\uB09C\uB2EC \uAC19\uC740 \uAE30\uAC04 \uB300\uBE44"), /* @__PURE__ */ React.createElement("span", { className: cx("v", p.lastSame > 0 && (p.diffLast > 0 ? "bad" : "good")) }, p.lastSame > 0 ? (p.diffLast > 0 ? "+" : "\u2212") + fmt(Math.abs(p.diffLast)) + "\uC6D0" : "\u2014"), /* @__PURE__ */ React.createElement("span", { className: "s" }, p.lastSame > 0 ? "\uC9C0\uB09C\uB2EC 1~" + p.elapsed + "\uC77C " + fmt(p.lastSame) + "\uC6D0" : "\uC9C0\uB09C\uB2EC \uAE30\uB85D\uC774 \uC5C6\uC5B4\uC694"))), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 20 } }, /* @__PURE__ */ React.createElement("span", { className: "label" }, "\uC694\uC77C\uBCC4 \uD558\uB8E8 \uD3C9\uADE0", p.topWeekday ? " \xB7 " + p.topWeekday.label + "\uC694\uC77C\uC774 \uAC00\uC7A5 \uB9CE\uC544\uC694" : ""), /* @__PURE__ */ React.createElement("div", { className: "wd", role: "img", "aria-label": p.byWeekday.map((w) => w.label + " " + fmt(w.avg) + "\uC6D0").join(", ") }, p.byWeekday.map((w) => /* @__PURE__ */ React.createElement("div", { key: w.label, className: cx(p.topWeekday && p.topWeekday.label === w.label && "top") }, /* @__PURE__ */ React.createElement("i", { style: { height: Math.max(3, w.avg / maxWd * 70) + "px" } }), /* @__PURE__ */ React.createElement("span", null, w.label))))));
 }
 function buildPrompt({ p, data, env, sum }) {
-  const month = p.today.slice(0, 7);
-  const recent = data.expenses.filter((e) => e.date.slice(0, 7) === month).sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 25).map((e) => "- " + e.date + " " + (e.ts ? hhmm(e.ts) : "") + " " + e.category + " " + e.amount + "\uC6D0" + (e.memo ? " (" + e.memo + ")" : "")).join("\n");
+  const recent = data.expenses.filter((e) => e.date >= p.start && e.date <= p.end).sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 25).map((e) => "- " + e.date + " " + (e.ts ? hhmm(e.ts) : "") + " " + e.category + " " + e.amount + "\uC6D0" + (e.memo ? " (" + e.memo + ")" : "")).join("\n");
   const facts = {
     \uC624\uB298: p.today,
-    \uD55C\uB2EC\uC608\uC0B0: p.budget,
+    \uC608\uC0B0\uAE30\uAC04: p.start + "~" + p.end,
+    \uAE30\uAC04\uC608\uC0B0: p.budget,
     \uACBD\uACFC\uC77C: p.elapsed + "/" + p.dim,
     \uC774\uBC88\uB2EC\uC9C0\uCD9C: p.spentMonth,
     \uD558\uB8E8\uD3C9\uADE0: p.avgPerDay,
@@ -1521,11 +1593,12 @@ function AdviceCard({ p, tips, data, env, sum, store }) {
   return /* @__PURE__ */ React.createElement("section", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "card-head" }, /* @__PURE__ */ React.createElement("h2", { className: "card-title" }, "\uC18C\uBE44 \uCF54\uCE58"), adv && /* @__PURE__ */ React.createElement("span", { className: "ai-badge" }, "AI")), /* @__PURE__ */ React.createElement("div", { className: "tips" }, tips.map((t, k) => /* @__PURE__ */ React.createElement("div", { key: t.id, className: cx("tip", t.tone) }, /* @__PURE__ */ React.createElement("span", { className: "dot", "aria-hidden": "true" }, t.tone === "good" ? "\u2713" : t.tone === "info" ? "i" : "!"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, t.title), /* @__PURE__ */ React.createElement("p", null, t.body))))), !IS_APP && /* @__PURE__ */ React.createElement("div", { className: "ai-box" }, adv && state !== "loading" && /* @__PURE__ */ React.createElement(React.Fragment, null, adv.summary && /* @__PURE__ */ React.createElement("p", { className: "ai-sum" }, adv.summary), /* @__PURE__ */ React.createElement("div", { className: "tips" }, adv.tips.map((t, k) => /* @__PURE__ */ React.createElement("div", { key: k, className: "tip" }, /* @__PURE__ */ React.createElement("span", { className: "dot", "aria-hidden": "true" }, k + 1), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h3", null, t.title), t.body && /* @__PURE__ */ React.createElement("p", null, t.body), t.action && /* @__PURE__ */ React.createElement("span", { className: "act" }, "\u2192 ", t.action))))), /* @__PURE__ */ React.createElement("p", { className: "ai-meta" }, stale ? stamp(adv.ts) + " \uAE30\uC900\uC774\uC5D0\uC694. \uADF8 \uB4A4\uB85C \uAE30\uB85D\uC774 \uBC14\uB00C\uC5C8\uC5B4\uC694." : stamp(adv.ts) + " \uAE30\uC900 \xB7 Claude\uAC00 \uC774\uBC88 \uB2EC \uAE30\uB85D\uC744 \uBCF4\uACE0 \uC791\uC131")), state === "loading" && /* @__PURE__ */ React.createElement("div", { className: "thinking" }, /* @__PURE__ */ React.createElement("span", { className: "dots", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("i", null), /* @__PURE__ */ React.createElement("i", null), /* @__PURE__ */ React.createElement("i", null)), "Claude\uAC00 \uC774\uBC88 \uB2EC \uAE30\uB85D\uC744 \uC0B4\uD3B4\uBCF4\uB294 \uC911\uC774\uC5D0\uC694", /* @__PURE__ */ React.createElement("button", { type: "button", className: "more", style: { marginLeft: "auto" }, onClick: () => ctl.current && ctl.current.abort() }, "\uBA48\uCD94\uAE30")), sample && state !== "loading" && /* @__PURE__ */ React.createElement("button", { type: "button", className: cx("btn block", adv ? "grey" : "soft"), style: { marginTop: adv ? 14 : 0 }, onClick: ask, disabled: !p.count }, !p.count ? "\uC9C0\uCD9C\uC744 \uAE30\uB85D\uD558\uBA74 AI \uC870\uC5B8\uC744 \uBC1B\uC744 \uC218 \uC788\uC5B4\uC694" : adv ? stale ? "\uCD5C\uC2E0 \uAE30\uB85D\uC73C\uB85C \uB2E4\uC2DC \uBD84\uC11D\uD558\uAE30" : "\uB2E4\uC2DC \uBD84\uC11D\uD558\uAE30" : "Claude\uC5D0\uAC8C \uB9DE\uCDA4 \uC870\uC5B8 \uBC1B\uAE30"), sample === void 0 && /* @__PURE__ */ React.createElement("p", { className: "ai-meta" }, "AI \uC870\uC5B8\uC744 \uC900\uBE44\uD558\uB294 \uC911\u2026"), sample === null && !adv && /* @__PURE__ */ React.createElement("p", { className: "ai-meta" }, "\uC774 \uD654\uBA74\uC5D0\uC11C\uB294 AI \uC870\uC5B8\uC744 \uC4F8 \uC218 \uC5C6\uC5B4\uC694. \uC704 \uAE30\uBCF8 \uBD84\uC11D\uC744 \uCC38\uACE0\uD574\uC8FC\uC138\uC694."), msg && /* @__PURE__ */ React.createElement("p", { className: "err", role: "alert" }, msg)));
 }
 function ReportTab({ data, today, p, tips, env, sum, store }) {
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("h1", { className: "page-title" }, "\uC18C\uBE44 \uB9AC\uD3EC\uD2B8"), /* @__PURE__ */ React.createElement("p", { className: "page-sub" }, "\uADF8\uB798\uD504\uB85C \uD750\uB984\uC744 \uBCF4\uACE0, \uCF54\uCE58\uC5D0\uAC8C \uC2B5\uAD00\uC744 \uBB3C\uC5B4\uBD10\uC694."), /* @__PURE__ */ React.createElement("div", { className: "grid2" }, /* @__PURE__ */ React.createElement("div", { className: "cols" }, /* @__PURE__ */ React.createElement(PeriodCard, { expenses: data.expenses, today }), /* @__PURE__ */ React.createElement(FlowCard, { expenses: data.expenses, budget: data.budget, today, p })), /* @__PURE__ */ React.createElement("div", { className: "cols" }, /* @__PURE__ */ React.createElement(AdviceCard, { p, tips, data, env, sum, store }), /* @__PURE__ */ React.createElement(PatternCard, { p }))));
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("h1", { className: "page-title" }, "\uC18C\uBE44 \uB9AC\uD3EC\uD2B8"), /* @__PURE__ */ React.createElement("p", { className: "page-sub" }, "\uADF8\uB798\uD504\uB85C \uD750\uB984\uC744 \uBCF4\uACE0, \uCF54\uCE58\uC5D0\uAC8C \uC2B5\uAD00\uC744 \uBB3C\uC5B4\uBD10\uC694."), /* @__PURE__ */ React.createElement("div", { className: "grid2" }, /* @__PURE__ */ React.createElement("div", { className: "cols" }, /* @__PURE__ */ React.createElement(PeriodCard, { expenses: data.expenses, today }), /* @__PURE__ */ React.createElement(FlowCard, { expenses: data.expenses, budget: data.budget, today, p, period: data.period })), /* @__PURE__ */ React.createElement("div", { className: "cols" }, /* @__PURE__ */ React.createElement(AdviceCard, { p, tips, data, env, sum, store }), /* @__PURE__ */ React.createElement(PatternCard, { p }))));
 }
-function HistoryTab({ expenses, today, onDelete }) {
-  const month = today.slice(0, 7);
-  const list = expenses.filter((e) => e.date.slice(0, 7) === month).sort((a, b) => b.date.localeCompare(a.date) || b.ts - a.ts);
+function HistoryTab({ expenses, today, period, onDelete }) {
+  const per = B.periodRange(today, period);
+  const W = words(per);
+  const list = expenses.filter((e) => e.date >= per.start && e.date <= per.end).sort((a, b) => b.date.localeCompare(a.date) || b.ts - a.ts);
   const total = list.reduce((a, e) => a + e.amount, 0);
   const groups = [];
   for (const e of list) {
@@ -1535,8 +1608,7 @@ function HistoryTab({ expenses, today, onDelete }) {
       g.sum += e.amount;
     } else groups.push({ date: e.date, items: [e], sum: e.amount });
   }
-  const [, m] = today.split("-").map(Number);
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("h1", { className: "page-title" }, m, "\uC6D4 \uAC70\uB798\uB0B4\uC5ED"), /* @__PURE__ */ React.createElement("p", { className: "page-sub num" }, list.length, "\uAC74 \xB7 \uCD1D ", fmt(total), "\uC6D0"), /* @__PURE__ */ React.createElement("section", { className: "card tight" }, !list.length && /* @__PURE__ */ React.createElement("p", { className: "empty" }, "\uC544\uC9C1 \uC774\uBC88 \uB2EC \uAE30\uB85D\uC774 \uC5C6\uC5B4\uC694. \uC544\uB798 \uAC00\uC6B4\uB370 + \uBC84\uD2BC\uC73C\uB85C \uCCAB \uC9C0\uCD9C\uC744 \uB0A8\uACA8\uBCF4\uC138\uC694."), groups.map((g) => /* @__PURE__ */ React.createElement("div", { key: g.date }, /* @__PURE__ */ React.createElement("div", { className: "day-head" }, /* @__PURE__ */ React.createElement("span", null, dayLabel(g.date), g.date === today && /* @__PURE__ */ React.createElement("em", null, "\uC624\uB298")), /* @__PURE__ */ React.createElement("span", { className: "num" }, "\u2212", fmt(g.sum), "\uC6D0")), /* @__PURE__ */ React.createElement("ul", { className: "list" }, g.items.map((e) => /* @__PURE__ */ React.createElement("li", { key: e.id, className: "row" }, /* @__PURE__ */ React.createElement(Avatar, { cat: e.category }), /* @__PURE__ */ React.createElement("div", { className: "row-main" }, /* @__PURE__ */ React.createElement("span", { className: "row-title" }, e.memo || e.category), /* @__PURE__ */ React.createElement("span", { className: "row-sub" }, e.category, " \xB7 ", hhmm(e.ts), e.fromWish && /* @__PURE__ */ React.createElement("span", { className: "from-wish" }, " \xB7 \uACE0\uBBFC \uD6C4 \uAD6C\uB9E4"))), /* @__PURE__ */ React.createElement("span", { className: "row-amt" }, "\u2212", fmt(e.amount), "\uC6D0"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "del", onClick: () => onDelete(e), "aria-label": (e.memo || e.category) + " " + fmt(e.amount) + "\uC6D0 \uC0AD\uC81C" }, /* @__PURE__ */ React.createElement(Icon, { name: "x", size: 16 })))))))));
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("h1", { className: "page-title" }, W.title, " \uAC70\uB798\uB0B4\uC5ED"), /* @__PURE__ */ React.createElement("p", { className: "page-sub num" }, per.custom ? W.range + " \xB7 " : "", list.length, "\uAC74 \xB7 \uCD1D ", fmt(total), "\uC6D0"), /* @__PURE__ */ React.createElement("section", { className: "card tight" }, !list.length && /* @__PURE__ */ React.createElement("p", { className: "empty" }, "\uC544\uC9C1 ", W.cur, " \uAE30\uB85D\uC774 \uC5C6\uC5B4\uC694. \uC544\uB798 \uAC00\uC6B4\uB370 + \uBC84\uD2BC\uC73C\uB85C \uCCAB \uC9C0\uCD9C\uC744 \uB0A8\uACA8\uBCF4\uC138\uC694."), groups.map((g) => /* @__PURE__ */ React.createElement("div", { key: g.date }, /* @__PURE__ */ React.createElement("div", { className: "day-head" }, /* @__PURE__ */ React.createElement("span", null, dayLabel(g.date), g.date === today && /* @__PURE__ */ React.createElement("em", null, "\uC624\uB298")), /* @__PURE__ */ React.createElement("span", { className: "num" }, "\u2212", fmt(g.sum), "\uC6D0")), /* @__PURE__ */ React.createElement("ul", { className: "list" }, g.items.map((e) => /* @__PURE__ */ React.createElement("li", { key: e.id, className: "row" }, /* @__PURE__ */ React.createElement(Avatar, { cat: e.category }), /* @__PURE__ */ React.createElement("div", { className: "row-main" }, /* @__PURE__ */ React.createElement("span", { className: "row-title" }, e.memo || e.category), /* @__PURE__ */ React.createElement("span", { className: "row-sub" }, e.category, " \xB7 ", hhmm(e.ts), e.fromWish && /* @__PURE__ */ React.createElement("span", { className: "from-wish" }, " \xB7 \uACE0\uBBFC \uD6C4 \uAD6C\uB9E4"))), /* @__PURE__ */ React.createElement("span", { className: "row-amt" }, "\u2212", fmt(e.amount), "\uC6D0"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "del", onClick: () => onDelete(e), "aria-label": (e.memo || e.category) + " " + fmt(e.amount) + "\uC6D0 \uC0AD\uC81C" }, /* @__PURE__ */ React.createElement(Icon, { name: "x", size: 16 })))))))));
 }
 function validBackup(o) {
   const d = o && o.app === "wallet" && o.data;
@@ -1590,7 +1662,7 @@ function BackupBox({ store, onDone }) {
   };
   return /* @__PURE__ */ React.createElement("div", { className: "backup" }, /* @__PURE__ */ React.createElement("span", { className: "label" }, "\uBC31\uC5C5"), /* @__PURE__ */ React.createElement("p", { className: "row-sub", style: { whiteSpace: "normal", marginBottom: 10 } }, "\uAE30\uB85D\uC740 \uC774 \uD734\uB300\uD3F0\uC5D0\uB9CC \uC800\uC7A5\uB3FC\uC694. \uD3F0\uC744 \uBC14\uAFB8\uAC70\uB098 \uC571\uC744 \uC9C0\uC6B0\uAE30 \uC804\uC5D0 \uBC31\uC5C5 \uD30C\uC77C\uC744 \uC800\uC7A5\uD574\uB450\uC138\uC694."), /* @__PURE__ */ React.createElement("div", { className: "btn-row" }, /* @__PURE__ */ React.createElement("button", { type: "button", className: "btn grey sm", onClick: save }, "\uBC31\uC5C5 \uD30C\uC77C \uC800\uC7A5"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "btn grey sm", onClick: () => file.current.click() }, "\uBC31\uC5C5 \uBD88\uB7EC\uC624\uAE30"), /* @__PURE__ */ React.createElement("input", { ref: file, type: "file", accept: "application/json,.json", hidden: true, onChange: pick })), pending && /* @__PURE__ */ React.createElement("div", { className: "hint warn", style: { display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("span", null, "\uC608\uC0B0 ", fmt(pending.budget), "\uC6D0 \xB7 \uC9C0\uCD9C ", pending.expenses.length, "\uAC74\uC9DC\uB9AC \uBC31\uC5C5\uC774\uC5D0\uC694. \uBD88\uB7EC\uC624\uBA74 \uC9C0\uAE08 \uAE30\uB85D\uC740 \uC774 \uBC31\uC5C5\uC73C\uB85C \uBC14\uB00C\uC5B4\uC694."), /* @__PURE__ */ React.createElement("div", { className: "btn-row" }, /* @__PURE__ */ React.createElement("button", { type: "button", className: "btn grey sm", onClick: () => setPending(null) }, "\uCDE8\uC18C"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "btn primary sm", onClick: apply }, "\uBD88\uB7EC\uC624\uAE30"))), msg && /* @__PURE__ */ React.createElement("p", { className: "row-sub", style: { whiteSpace: "normal", marginTop: 8 } }, msg));
 }
-function SettingsSheet({ open, budget, limits, onSave, onClose, storeLabel, onBudget, store, onBackup }) {
+function SettingsSheet({ open, budget, limits, onSave, onClose, storeLabel, onBudget, onPeriod, per, store, onBackup }) {
   const bud = useMoney(budget ? fmt(budget) : "");
   const [lim, setLim] = useState({});
   const [err, setErr] = useState("");
@@ -1633,7 +1705,7 @@ function SettingsSheet({ open, budget, limits, onSave, onClose, storeLabel, onBu
     for (const c of CATS) t[c] = fmt(share);
     setLim(t);
   };
-  return /* @__PURE__ */ React.createElement(Sheet, { open, onClose, title: "\uC608\uC0B0 \xB7 \uBD09\uD22C \uC124\uC815", labelId: "setTitle" }, /* @__PURE__ */ React.createElement("form", { onSubmit: save, noValidate: true }, /* @__PURE__ */ React.createElement("label", { className: "label", htmlFor: "setBudget" }, "\uD55C \uB2EC \uC608\uC0B0"), /* @__PURE__ */ React.createElement("span", { className: "money-field" }, /* @__PURE__ */ React.createElement("input", { id: "setBudget", inputMode: "numeric", value: bud.text, onChange: bud.onChange }), /* @__PURE__ */ React.createElement("em", null, "\uC6D0")), /* @__PURE__ */ React.createElement("p", { className: "row-sub", style: { marginTop: 8, whiteSpace: "normal" } }, "\uBC14\uAFB8\uBA74 \uC624\uB298\uBD80\uD130 \uD558\uB8E8 \uC608\uC0B0\uC774 \uB2E4\uC2DC \uACC4\uC0B0\uB3FC\uC694. ", /* @__PURE__ */ React.createElement("button", { type: "button", className: "link-btn", onClick: onBudget }, "\uBBF8\uB9AC\uBCF4\uAE30\uB85C \uBC14\uAFB8\uAE30")), /* @__PURE__ */ React.createElement("div", { className: "section-gap", style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 } }, /* @__PURE__ */ React.createElement("span", { className: "label", style: { margin: 0 } }, "\uCE74\uD14C\uACE0\uB9AC \uBD09\uD22C"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "split", onClick: evenSplit }, "\uB611\uAC19\uC774 \uB098\uB204\uAE30")), /* @__PURE__ */ React.createElement("div", { className: "lim-list" }, CATS.map((c) => /* @__PURE__ */ React.createElement("label", { key: c, className: "lim-row", htmlFor: "lim-" + c, style: catVar(c) }, /* @__PURE__ */ React.createElement(Avatar, { cat: c }), /* @__PURE__ */ React.createElement("span", { className: "nm" }, c), /* @__PURE__ */ React.createElement("span", { className: "money-field" }, /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement(Sheet, { open, onClose, title: "\uC608\uC0B0 \xB7 \uBD09\uD22C \uC124\uC815", labelId: "setTitle" }, /* @__PURE__ */ React.createElement("form", { onSubmit: save, noValidate: true }, /* @__PURE__ */ React.createElement("label", { className: "label", htmlFor: "setBudget" }, "\uD55C \uB2EC \uC608\uC0B0"), /* @__PURE__ */ React.createElement("span", { className: "money-field" }, /* @__PURE__ */ React.createElement("input", { id: "setBudget", inputMode: "numeric", value: bud.text, onChange: bud.onChange }), /* @__PURE__ */ React.createElement("em", null, "\uC6D0")), /* @__PURE__ */ React.createElement("p", { className: "row-sub", style: { marginTop: 8, whiteSpace: "normal" } }, "\uBC14\uAFB8\uBA74 \uC624\uB298\uBD80\uD130 \uD558\uB8E8 \uC608\uC0B0\uC774 \uB2E4\uC2DC \uACC4\uC0B0\uB3FC\uC694. ", /* @__PURE__ */ React.createElement("button", { type: "button", className: "link-btn", onClick: onBudget }, "\uBBF8\uB9AC\uBCF4\uAE30\uB85C \uBC14\uAFB8\uAE30")), /* @__PURE__ */ React.createElement("span", { className: "label section-gap" }, "\uC608\uC0B0 \uAE30\uAC04"), /* @__PURE__ */ React.createElement("button", { type: "button", className: cx("period-row", per.custom && "on"), onClick: onPeriod, style: { marginTop: 0 } }, /* @__PURE__ */ React.createElement("span", { className: "pr-ic", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement(Icon, { name: "cal", size: 16, stroke: 2.2 })), /* @__PURE__ */ React.createElement("span", { className: "pr-main num" }, words(per).range, /* @__PURE__ */ React.createElement("small", null, per.custom ? per.days + "\uC77C \uB3D9\uC548" : "\uB9E4\uB2EC 1\uC77C~\uB9D0\uC77C (\uB2EC\uB825 \uAE30\uC900)")), /* @__PURE__ */ React.createElement("span", { className: "pr-go" }, "\uBC14\uAFB8\uAE30")), /* @__PURE__ */ React.createElement("div", { className: "section-gap", style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 } }, /* @__PURE__ */ React.createElement("span", { className: "label", style: { margin: 0 } }, "\uCE74\uD14C\uACE0\uB9AC \uBD09\uD22C"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "split", onClick: evenSplit }, "\uB611\uAC19\uC774 \uB098\uB204\uAE30")), /* @__PURE__ */ React.createElement("div", { className: "lim-list" }, CATS.map((c) => /* @__PURE__ */ React.createElement("label", { key: c, className: "lim-row", htmlFor: "lim-" + c, style: catVar(c) }, /* @__PURE__ */ React.createElement(Avatar, { cat: c }), /* @__PURE__ */ React.createElement("span", { className: "nm" }, c), /* @__PURE__ */ React.createElement("span", { className: "money-field" }, /* @__PURE__ */ React.createElement(
     "input",
     {
       id: "lim-" + c,
@@ -1645,12 +1717,13 @@ function SettingsSheet({ open, budget, limits, onSave, onClose, storeLabel, onBu
         setLim({ ...lim, [c]: Number.isNaN(n) ? "" : fmt(n) });
       }
     }
-  ), /* @__PURE__ */ React.createElement("em", null, "\uC6D0"))))), /* @__PURE__ */ React.createElement("div", { className: cx("alloc", left < 0 && "neg") }, /* @__PURE__ */ React.createElement("div", { className: "meter", style: { marginTop: 0, marginBottom: 8 } }, /* @__PURE__ */ React.createElement("i", { style: { width: Math.min(100, pct(total, bud.value || 1)) + "%", background: left < 0 ? "var(--red)" : void 0 } })), /* @__PURE__ */ React.createElement("span", { className: "num" }, "\uBC30\uBD84 ", fmt(total), "\uC6D0 \xB7 ", left >= 0 ? "\uB0A8\uC740 " + fmt(left) + "\uC6D0\uC740 \uBD09\uD22C \uBC16 \uC790\uC720 \uC9C0\uCD9C" : fmt(-left) + "\uC6D0 \uCD08\uACFC")), /* @__PURE__ */ React.createElement("ul", { className: "rules" }, /* @__PURE__ */ React.createElement("li", null, "\uD558\uB8E8 \uC608\uC0B0 = (\uD55C \uB2EC \uC608\uC0B0 \u2212 \uC5B4\uC81C\uAE4C\uC9C0 \uC4F4 \uB3C8) \xF7 \uC624\uB298 \uD3EC\uD568 \uB0A8\uC740 \uB0A0"), /* @__PURE__ */ React.createElement("li", null, "\uBD09\uD22C\uB294 80%\uB97C \uB118\uC73C\uBA74 \uC8FC\uD669, \uD55C\uB3C4\uB97C \uB118\uC73C\uBA74 \uBE68\uAC15\uC73C\uB85C \uBC14\uB00C\uC5B4\uC694"), /* @__PURE__ */ React.createElement("li", null, "\uACE0\uBBFC\uD568\uC5D0 \uB123\uC740 \uBB3C\uAC74\uC740 24\uC2DC\uAC04\uC774 \uC9C0\uB098\uC57C \u2018\uC0B4\uAC8C\uC694\u2019\uB97C \uB204\uB97C \uC218 \uC788\uC5B4\uC694"), /* @__PURE__ */ React.createElement("li", null, storeLabel)), IS_APP && store && store.importAll && /* @__PURE__ */ React.createElement(BackupBox, { store, onDone: (m) => {
+  ), /* @__PURE__ */ React.createElement("em", null, "\uC6D0"))))), /* @__PURE__ */ React.createElement("div", { className: cx("alloc", left < 0 && "neg") }, /* @__PURE__ */ React.createElement("div", { className: "meter", style: { marginTop: 0, marginBottom: 8 } }, /* @__PURE__ */ React.createElement("i", { style: { width: Math.min(100, pct(total, bud.value || 1)) + "%", background: left < 0 ? "var(--red)" : void 0 } })), /* @__PURE__ */ React.createElement("span", { className: "num" }, "\uBC30\uBD84 ", fmt(total), "\uC6D0 \xB7 ", left >= 0 ? "\uB0A8\uC740 " + fmt(left) + "\uC6D0\uC740 \uBD09\uD22C \uBC16 \uC790\uC720 \uC9C0\uCD9C" : fmt(-left) + "\uC6D0 \uCD08\uACFC")), /* @__PURE__ */ React.createElement("ul", { className: "rules" }, /* @__PURE__ */ React.createElement("li", null, "\uD558\uB8E8 \uC608\uC0B0 = (\uC608\uC0B0 \u2212 \uC5B4\uC81C\uAE4C\uC9C0 \uC4F4 \uB3C8) \xF7 \uAE30\uAC04 \uB05D\uAE4C\uC9C0 \uC624\uB298 \uD3EC\uD568 \uB0A8\uC740 \uB0A0"), /* @__PURE__ */ React.createElement("li", null, "\uAE30\uAC04\uC744 \uC815\uD558\uBA74 \uADF8 \uAE30\uAC04\uC758 \uC9C0\uCD9C\uB9CC \uACC4\uC0B0\uD558\uACE0, \uB05D\uB098\uBA74 \uB2EC\uB825 \uD55C \uB2EC \uAE30\uC900\uC73C\uB85C \uB3CC\uC544\uAC00\uC694"), /* @__PURE__ */ React.createElement("li", null, "\uBD09\uD22C\uB294 80%\uB97C \uB118\uC73C\uBA74 \uC8FC\uD669, \uD55C\uB3C4\uB97C \uB118\uC73C\uBA74 \uBE68\uAC15\uC73C\uB85C \uBC14\uB00C\uC5B4\uC694"), /* @__PURE__ */ React.createElement("li", null, "\uACE0\uBBFC\uD568\uC5D0 \uB123\uC740 \uBB3C\uAC74\uC740 24\uC2DC\uAC04\uC774 \uC9C0\uB098\uC57C \u2018\uC0B4\uAC8C\uC694\u2019\uB97C \uB204\uB97C \uC218 \uC788\uC5B4\uC694"), /* @__PURE__ */ React.createElement("li", null, storeLabel)), IS_APP && store && store.importAll && /* @__PURE__ */ React.createElement(BackupBox, { store, onDone: (m) => {
     onClose();
     onBackup(m);
   } }), /* @__PURE__ */ React.createElement("p", { className: "err", role: "alert" }, err), /* @__PURE__ */ React.createElement("div", { className: "btn-row" }, /* @__PURE__ */ React.createElement("button", { type: "button", className: "btn grey", onClick: onClose }, "\uCDE8\uC18C"), /* @__PURE__ */ React.createElement("button", { type: "submit", className: "btn primary" }, "\uC800\uC7A5"))));
 }
-function BudgetSheet({ open, budget, limits, changes, expenses, today, onSave, onClose }) {
+function BudgetSheet({ open, budget, limits, changes, expenses, today, period, onSave, onClose }) {
+  const W = words(B.periodRange(today, period));
   const bud = useMoney("");
   const [fit, setFit] = useState(true);
   const [err, setErr] = useState("");
@@ -1666,7 +1739,7 @@ function BudgetSheet({ open, budget, limits, changes, expenses, today, onSave, o
   }, [open]);
   const val = Number.isNaN(bud.value) ? 0 : bud.value;
   const valid = B.isValidAmount(val) && val >= 1e3;
-  const r = valid ? B.budgetChange({ budget, newBudget: val, limits, expenses, today }) : null;
+  const r = valid ? B.budgetChange({ budget, newBudget: val, limits, expenses, today, period }) : null;
   const same = val === budget;
   const bump = (n) => {
     bud.setText(fmt(Math.max(0, val + n)));
@@ -1698,13 +1771,82 @@ function BudgetSheet({ open, budget, limits, changes, expenses, today, onSave, o
     setBusy(false);
   };
   const recent = (changes || []).slice(-3).reverse();
-  return /* @__PURE__ */ React.createElement(Sheet, { open, onClose, title: "\uD55C \uB2EC \uC608\uC0B0 \uBCC0\uACBD", labelId: "budTitle" }, /* @__PURE__ */ React.createElement("form", { onSubmit: save, noValidate: true }, /* @__PURE__ */ React.createElement("p", { className: "row-sub", style: { whiteSpace: "normal", marginBottom: 6 } }, "\uC9C0\uAE08 \uC608\uC0B0 ", /* @__PURE__ */ React.createElement("b", { className: "num" }, fmt(budget), "\uC6D0"), " \xB7 \uC54C\uBC14\uBE44\uAC00 \uB4E4\uC5B4\uC654\uAC70\uB098 \uACC4\uD68D\uC774 \uBC14\uB00C\uC5C8\uC744 \uB54C \uBC14\uAFD4\uC694"), /* @__PURE__ */ React.createElement("label", { className: "amount-in", htmlFor: "newBudget" }, /* @__PURE__ */ React.createElement("input", { id: "newBudget", ref: input, inputMode: "numeric", autoComplete: "off", placeholder: "0", value: bud.text, onChange: (e) => {
+  return /* @__PURE__ */ React.createElement(Sheet, { open, onClose, title: W.cur === "\uC774\uBC88 \uB2EC" ? "\uD55C \uB2EC \uC608\uC0B0 \uBCC0\uACBD" : "\uAE30\uAC04 \uC608\uC0B0 \uBCC0\uACBD", labelId: "budTitle" }, /* @__PURE__ */ React.createElement("form", { onSubmit: save, noValidate: true }, /* @__PURE__ */ React.createElement("p", { className: "row-sub", style: { whiteSpace: "normal", marginBottom: 6 } }, "\uC9C0\uAE08 \uC608\uC0B0 ", /* @__PURE__ */ React.createElement("b", { className: "num" }, fmt(budget), "\uC6D0"), " \xB7 \uC54C\uBC14\uBE44\uAC00 \uB4E4\uC5B4\uC654\uAC70\uB098 \uACC4\uD68D\uC774 \uBC14\uB00C\uC5C8\uC744 \uB54C \uBC14\uAFD4\uC694"), /* @__PURE__ */ React.createElement("label", { className: "amount-in", htmlFor: "newBudget" }, /* @__PURE__ */ React.createElement("input", { id: "newBudget", ref: input, inputMode: "numeric", autoComplete: "off", placeholder: "0", value: bud.text, onChange: (e) => {
     bud.onChange(e);
     setErr("");
-  }, "aria-label": "\uC0C8 \uD55C \uB2EC \uC608\uC0B0" }), /* @__PURE__ */ React.createElement("span", null, "\uC6D0")), /* @__PURE__ */ React.createElement("div", { className: "chips" }, [-5e4, -1e4, 1e4, 5e4, 1e5].map((n) => /* @__PURE__ */ React.createElement("button", { key: n, type: "button", className: "chip", onClick: () => bump(n) }, n > 0 ? "+" : "\u2212", Math.abs(n) / 1e4, "\uB9CC"))), r && !same && /* @__PURE__ */ React.createElement("div", { className: "cmp", "aria-live": "polite" }, /* @__PURE__ */ React.createElement("div", { className: "cmp-row head" }, /* @__PURE__ */ React.createElement("span", null), /* @__PURE__ */ React.createElement("span", null, "\uC9C0\uAE08"), /* @__PURE__ */ React.createElement("span", null, "\uBC14\uAFB8\uBA74")), /* @__PURE__ */ React.createElement("div", { className: "cmp-row" }, /* @__PURE__ */ React.createElement("span", null, "\uD558\uB8E8 \uC608\uC0B0"), /* @__PURE__ */ React.createElement("span", { className: "num" }, fmt(r.before.dailyAllowance), "\uC6D0"), /* @__PURE__ */ React.createElement("span", { className: cx("num", "to", tone(r.dailyDiff)) }, fmt(r.after.dailyAllowance), "\uC6D0", /* @__PURE__ */ React.createElement("small", null, delta(r.dailyDiff)))), /* @__PURE__ */ React.createElement("div", { className: "cmp-row" }, /* @__PURE__ */ React.createElement("span", null, "\uC624\uB298 \uC4F8 \uB3C8"), /* @__PURE__ */ React.createElement("span", { className: "num" }, signed(r.before.todayLeft), "\uC6D0"), /* @__PURE__ */ React.createElement("span", { className: cx("num", "to", tone(r.after.todayLeft - r.before.todayLeft)) }, signed(r.after.todayLeft), "\uC6D0")), /* @__PURE__ */ React.createElement("div", { className: "cmp-row" }, /* @__PURE__ */ React.createElement("span", null, "\uC774\uBC88 \uB2EC \uB0A8\uC74C"), /* @__PURE__ */ React.createElement("span", { className: "num" }, signed(r.before.monthLeft), "\uC6D0"), /* @__PURE__ */ React.createElement("span", { className: cx("num", "to", tone(r.diff)) }, signed(r.after.monthLeft), "\uC6D0"))), r && r.belowSpent && /* @__PURE__ */ React.createElement("p", { className: "hint over" }, "\uC774\uBC88 \uB2EC\uC5D0 \uC774\uBBF8 ", fmt(r.spentMonth), "\uC6D0\uC744 \uC37C\uC5B4\uC694. \uC774 \uC608\uC0B0\uC774\uBA74 \uB0A8\uC740 \uB0A0 \uD558\uB8E8 \uC608\uC0B0\uC774 0\uC6D0\uC774 \uB3FC\uC694."), r && !r.limitsFit && /* @__PURE__ */ React.createElement("label", { className: "fit-box" }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: fit, onChange: (e) => {
+  }, "aria-label": "\uC0C8 \uD55C \uB2EC \uC608\uC0B0" }), /* @__PURE__ */ React.createElement("span", null, "\uC6D0")), /* @__PURE__ */ React.createElement("div", { className: "chips" }, [-5e4, -1e4, 1e4, 5e4, 1e5].map((n) => /* @__PURE__ */ React.createElement("button", { key: n, type: "button", className: "chip", onClick: () => bump(n) }, n > 0 ? "+" : "\u2212", Math.abs(n) / 1e4, "\uB9CC"))), r && !same && /* @__PURE__ */ React.createElement("div", { className: "cmp", "aria-live": "polite" }, /* @__PURE__ */ React.createElement("div", { className: "cmp-row head" }, /* @__PURE__ */ React.createElement("span", null), /* @__PURE__ */ React.createElement("span", null, "\uC9C0\uAE08"), /* @__PURE__ */ React.createElement("span", null, "\uBC14\uAFB8\uBA74")), /* @__PURE__ */ React.createElement("div", { className: "cmp-row" }, /* @__PURE__ */ React.createElement("span", null, "\uD558\uB8E8 \uC608\uC0B0"), /* @__PURE__ */ React.createElement("span", { className: "num" }, fmt(r.before.dailyAllowance), "\uC6D0"), /* @__PURE__ */ React.createElement("span", { className: cx("num", "to", tone(r.dailyDiff)) }, fmt(r.after.dailyAllowance), "\uC6D0", /* @__PURE__ */ React.createElement("small", null, delta(r.dailyDiff)))), /* @__PURE__ */ React.createElement("div", { className: "cmp-row" }, /* @__PURE__ */ React.createElement("span", null, "\uC624\uB298 \uC4F8 \uB3C8"), /* @__PURE__ */ React.createElement("span", { className: "num" }, signed(r.before.todayLeft), "\uC6D0"), /* @__PURE__ */ React.createElement("span", { className: cx("num", "to", tone(r.after.todayLeft - r.before.todayLeft)) }, signed(r.after.todayLeft), "\uC6D0")), /* @__PURE__ */ React.createElement("div", { className: "cmp-row" }, /* @__PURE__ */ React.createElement("span", null, W.cur, " \uB0A8\uC74C"), /* @__PURE__ */ React.createElement("span", { className: "num" }, signed(r.before.monthLeft), "\uC6D0"), /* @__PURE__ */ React.createElement("span", { className: cx("num", "to", tone(r.diff)) }, signed(r.after.monthLeft), "\uC6D0"))), r && r.belowSpent && /* @__PURE__ */ React.createElement("p", { className: "hint over" }, W.cur, "\uC5D0 \uC774\uBBF8 ", fmt(r.spentMonth), "\uC6D0\uC744 \uC37C\uC5B4\uC694. \uC774 \uC608\uC0B0\uC774\uBA74 \uB0A8\uC740 \uB0A0 \uD558\uB8E8 \uC608\uC0B0\uC774 0\uC6D0\uC774 \uB3FC\uC694."), r && !r.limitsFit && /* @__PURE__ */ React.createElement("label", { className: "fit-box" }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: fit, onChange: (e) => {
     setFit(e.target.checked);
     setErr("");
   } }), /* @__PURE__ */ React.createElement("span", null, "\uBD09\uD22C \uD569\uACC4 ", fmt(r.limitsTotal), "\uC6D0\uC774 \uC0C8 \uC608\uC0B0\uBCF4\uB2E4 \uCEE4\uC694. ", /* @__PURE__ */ React.createElement("b", null, "\uBD09\uD22C \uD55C\uB3C4\uB97C \uBE44\uC728\uB300\uB85C \uC904\uC77C\uAC8C\uC694"), /* @__PURE__ */ React.createElement("small", { className: "num" }, Object.keys(limits).filter((c) => limits[c] > 0).map((c) => c + " " + short(limits[c]) + "\u2192" + short(r.scaledLimits[c])).join(" \xB7 ")))), recent.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "chg-log" }, /* @__PURE__ */ React.createElement("span", { className: "label", style: { marginBottom: 6 } }, "\uCD5C\uADFC \uBCC0\uACBD"), /* @__PURE__ */ React.createElement("ul", null, recent.map((c) => /* @__PURE__ */ React.createElement("li", { key: c.ts }, /* @__PURE__ */ React.createElement("span", null, stamp(c.ts)), /* @__PURE__ */ React.createElement("span", { className: "num" }, fmt(c.from), " \u2192 ", /* @__PURE__ */ React.createElement("b", null, fmt(c.to)), "\uC6D0"))))), /* @__PURE__ */ React.createElement("p", { className: "err", role: "alert" }, err), /* @__PURE__ */ React.createElement("button", { className: "btn primary block sheet-cta", type: "submit", disabled: busy || !valid }, !valid ? "\uAE08\uC561\uC744 \uC785\uB825\uD574\uC8FC\uC138\uC694" : same ? "\uB2EB\uAE30" : fmt(val) + "\uC6D0\uC73C\uB85C \uBC14\uAFB8\uAE30")));
+}
+const LEN_CHIPS = [7, 14, 30, 31];
+function PeriodSheet({ open, period, budget, expenses, today, onSave, onClose }) {
+  const [mode, setMode] = useState("month");
+  const [how, setHow] = useState("len");
+  const [start, setStart] = useState(today);
+  const [len, setLen] = useState("30");
+  const [end, setEnd] = useState(B.addDays(today, 29));
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    setErr("");
+    setHow("len");
+    if (B.isValidPeriod(period)) {
+      setMode("custom");
+      setStart(period.start);
+      setEnd(period.end);
+      setLen(String(B.periodDays(period)));
+    } else {
+      setMode("custom");
+      setStart(today);
+      setLen("30");
+      setEnd(B.addDays(today, 29));
+    }
+  }, [open]);
+  const n = parseInt(len, 10);
+  const cand = mode === "month" ? null : how === "len" ? /^\d{4}-\d{2}-\d{2}$/.test(start) && n >= 1 && n <= B.MAX_PERIOD_DAYS ? B.makePeriod(start, n) : null : { start, end };
+  const ok = mode === "month" || B.isValidPeriod(cand);
+  const per = ok ? B.periodRange(today, cand) : null;
+  const s = ok && budget ? B.summary({ budget, expenses, today, period: cand }) : null;
+  const dow = (ds) => WEEK[new Date(...ds.split("-").map((v, i) => i === 1 ? Number(v) - 1 : Number(v))).getDay()];
+  const save = async (ev) => {
+    ev.preventDefault();
+    if (!ok) {
+      setErr(how === "len" ? "\uC2DC\uC791\uC77C\uACFC 1~" + B.MAX_PERIOD_DAYS + "\uC77C \uC0AC\uC774 \uAE30\uAC04\uC744 \uC785\uB825\uD574\uC8FC\uC138\uC694." : "\uB05D\uB098\uB294 \uB0A0\uC774 \uC2DC\uC791\uC77C\uBCF4\uB2E4 \uAC19\uAC70\uB098 \uB4A4\uC5EC\uC57C \uD574\uC694. (\uCD5C\uB300 " + B.MAX_PERIOD_DAYS + "\uC77C)");
+      return;
+    }
+    setBusy(true);
+    try {
+      await onSave(mode === "month" ? null : cand);
+      onClose();
+    } catch (e) {
+      setErr("\uC800\uC7A5\uD558\uC9C0 \uBABB\uD588\uC5B4\uC694. \uB2E4\uC2DC \uC2DC\uB3C4\uD574\uC8FC\uC138\uC694.");
+    }
+    setBusy(false);
+  };
+  return /* @__PURE__ */ React.createElement(Sheet, { open, onClose, title: "\uC608\uC0B0 \uAE30\uAC04", labelId: "perTitle" }, /* @__PURE__ */ React.createElement("form", { onSubmit: save, noValidate: true }, /* @__PURE__ */ React.createElement("p", { className: "row-sub", style: { whiteSpace: "normal", marginBottom: 14 } }, "\uC6A9\uB3C8\xB7\uC54C\uBC14\uBE44 \uBC1B\uB294 \uB0A0\uC5D0 \uB9DE\uCDB0 \uC608\uC0B0 \uAE30\uAC04\uC744 \uC815\uD560 \uC218 \uC788\uC5B4\uC694. \uD558\uB8E8 \uC608\uC0B0\uC740 \uAE30\uAC04 \uB05D\uAE4C\uC9C0 \uB0A8\uC740 \uB0A0\uB85C \uB098\uB220\uC694."), /* @__PURE__ */ React.createElement("div", { className: "seg", role: "group", "aria-label": "\uAE30\uAC04 \uAE30\uC900" }, /* @__PURE__ */ React.createElement("button", { type: "button", "aria-pressed": mode === "month", onClick: () => {
+    setMode("month");
+    setErr("");
+  } }, "\uB9E4\uB2EC 1\uC77C~\uB9D0\uC77C"), /* @__PURE__ */ React.createElement("button", { type: "button", "aria-pressed": mode === "custom", onClick: () => {
+    setMode("custom");
+    setErr("");
+  } }, "\uAE30\uAC04 \uC9C1\uC811 \uC815\uD558\uAE30")), mode === "custom" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("label", { className: "label section-gap", htmlFor: "perStart" }, "\uC2DC\uC791\uC77C"), /* @__PURE__ */ React.createElement("span", { className: "money-field date-field" }, /* @__PURE__ */ React.createElement("input", { id: "perStart", type: "date", value: start, onChange: (e) => {
+    setStart(e.target.value);
+    setErr("");
+  } })), /* @__PURE__ */ React.createElement("div", { className: "chips", style: { margin: "10px 0 0" } }, /* @__PURE__ */ React.createElement("button", { type: "button", className: "chip", onClick: () => setStart(today) }, "\uC624\uB298\uBD80\uD130"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "chip", onClick: () => setStart(B.addDays(today, -1)) }, "\uC5B4\uC81C\uBD80\uD130")), /* @__PURE__ */ React.createElement("div", { className: "seg section-gap", role: "group", "aria-label": "\uAE30\uAC04 \uC815\uD558\uB294 \uBC29\uBC95", style: { marginTop: 22 } }, /* @__PURE__ */ React.createElement("button", { type: "button", "aria-pressed": how === "len", onClick: () => {
+    if (cand) setLen(String(B.periodDays(cand)));
+    setHow("len");
+  } }, "\uBA70\uCE60 \uB3D9\uC548"), /* @__PURE__ */ React.createElement("button", { type: "button", "aria-pressed": how === "end", onClick: () => {
+    if (cand) setEnd(cand.end);
+    setHow("end");
+  } }, "\uB05D\uB098\uB294 \uB0A0")), how === "len" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "money-field", style: { marginTop: 12 } }, /* @__PURE__ */ React.createElement("input", { id: "perLen", inputMode: "numeric", value: len, "aria-label": "\uAE30\uAC04 \uC77C \uC218", onChange: (e) => {
+    setLen(e.target.value.replace(/[^\d]/g, "").slice(0, 3));
+    setErr("");
+  } }), /* @__PURE__ */ React.createElement("em", null, "\uC77C \uB3D9\uC548")), /* @__PURE__ */ React.createElement("div", { className: "chips", style: { margin: "10px 0 0" } }, LEN_CHIPS.map((d) => /* @__PURE__ */ React.createElement("button", { key: d, type: "button", className: "chip", "aria-pressed": n === d, onClick: () => setLen(String(d)) }, d, "\uC77C")))) : /* @__PURE__ */ React.createElement("span", { className: "money-field date-field", style: { marginTop: 12 } }, /* @__PURE__ */ React.createElement("input", { id: "perEnd", type: "date", value: end, min: start, "aria-label": "\uB05D\uB098\uB294 \uB0A0", onChange: (e) => {
+    setEnd(e.target.value);
+    setErr("");
+  } }))), per && /* @__PURE__ */ React.createElement("div", { className: "cmp two", "aria-live": "polite" }, /* @__PURE__ */ React.createElement("div", { className: "cmp-row" }, /* @__PURE__ */ React.createElement("span", null, "\uAE30\uAC04"), /* @__PURE__ */ React.createElement("span", { className: "num to" }, mode === "month" ? "\uB9E4\uB2EC 1\uC77C~\uB9D0\uC77C" : mdShort(cand.start) + "(" + dow(cand.start) + ") ~ " + mdShort(cand.end) + "(" + dow(cand.end) + ")")), mode === "custom" && /* @__PURE__ */ React.createElement("div", { className: "cmp-row" }, /* @__PURE__ */ React.createElement("span", null, "\uAE38\uC774"), /* @__PURE__ */ React.createElement("span", { className: "num to" }, B.periodDays(cand), "\uC77C")), s && /* @__PURE__ */ React.createElement("div", { className: "cmp-row" }, /* @__PURE__ */ React.createElement("span", null, "\uC624\uB298 \uD558\uB8E8 \uC608\uC0B0"), /* @__PURE__ */ React.createElement("span", { className: "num to" }, fmt(s.dailyAllowance), "\uC6D0")), s && /* @__PURE__ */ React.createElement("div", { className: "cmp-row" }, /* @__PURE__ */ React.createElement("span", null, "\uB0A8\uC740 \uB0A0 (\uC624\uB298 \uD3EC\uD568)"), /* @__PURE__ */ React.createElement("span", { className: "num to" }, s.daysLeft, "\uC77C"))), per && per.state === "upcoming" && /* @__PURE__ */ React.createElement("p", { className: "hint warn" }, md(cand.start), "\uBD80\uD130 \uC2DC\uC791\uD574\uC694. \uADF8 \uC804\uAE4C\uC9C0\uB294 \uB2EC\uB825 \uD55C \uB2EC \uAE30\uC900\uC73C\uB85C \uACC4\uC0B0\uD574\uC694."), per && per.state === "ended" && /* @__PURE__ */ React.createElement("p", { className: "hint over" }, "\uC774\uBBF8 \uB05D\uB09C \uAE30\uAC04\uC774\uC5D0\uC694. \uC9C0\uAE08\uC740 \uB2EC\uB825 \uD55C \uB2EC \uAE30\uC900\uC73C\uB85C \uACC4\uC0B0\uB3FC\uC694."), mode === "custom" && per && per.custom && /* @__PURE__ */ React.createElement("p", { className: "hint" }, "\uAE30\uAC04 \uC548\uC758 \uC9C0\uCD9C\uB9CC \uD569\uCCD0\uC694. \uAE30\uAC04\uC774 \uB05D\uB098\uBA74 \uC790\uB3D9\uC73C\uB85C \uB2EC\uB825 \uD55C \uB2EC \uAE30\uC900\uC73C\uB85C \uB3CC\uC544\uAC00\uC694."), /* @__PURE__ */ React.createElement("p", { className: "err", role: "alert" }, err), /* @__PURE__ */ React.createElement("button", { className: "btn primary block sheet-cta", type: "submit", disabled: busy }, mode === "month" ? "\uB2EC\uB825 \uAE30\uC900\uC73C\uB85C \uC4F0\uAE30" : ok ? B.periodDays(cand) + "\uC77C \uAE30\uAC04\uC73C\uB85C \uC800\uC7A5" : "\uAE30\uAC04\uC744 \uD655\uC778\uD574\uC8FC\uC138\uC694")));
 }
 function Setup({ onSave, store, onRestored }) {
   const bud = useMoney();
@@ -1734,6 +1876,7 @@ function App() {
   const [tab, go] = useTab();
   const [settings, setSettings] = useState(false);
   const [budgetOpen, setBudgetOpen] = useState(false);
+  const [periodOpen, setPeriodOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [toast, setToast] = useState(null);
   const timer = useRef(null);
@@ -1742,31 +1885,48 @@ function App() {
     setToast({ msg, undo, tone, k: Date.now() });
     timer.current = setTimeout(() => setToast(null), 4500);
   }, []);
-  const s = useMemo(() => data.budget ? B.summary({ budget: data.budget, expenses: data.expenses, today }) : null, [data, today]);
-  const env = useMemo(() => B.envelopes({ budget: data.budget || 0, limits: data.limits, expenses: data.expenses, today }), [data, today]);
-  const p = useMemo(() => B.patterns({ budget: data.budget || 0, expenses: data.expenses, today }), [data, today]);
+  const period = data.period;
+  const per = useMemo(() => B.periodRange(today, period), [today, period]);
+  const s = useMemo(() => data.budget ? B.summary({ budget: data.budget, expenses: data.expenses, today, period }) : null, [data, today]);
+  const env = useMemo(() => B.envelopes({ budget: data.budget || 0, limits: data.limits, expenses: data.expenses, today, period }), [data, today]);
+  const p = useMemo(() => B.patterns({ budget: data.budget || 0, expenses: data.expenses, today, period }), [data, today]);
   const tips = useMemo(() => B.adviceRules(p), [p]);
-  const sum = B.wishSummary({ wishes: data.wishes, today });
+  const sum = B.wishSummary({ wishes: data.wishes, today, period });
   if (!store) return /* @__PURE__ */ React.createElement(Phone, { now }, /* @__PURE__ */ React.createElement("main", { className: "app" }, /* @__PURE__ */ React.createElement("section", { className: "card loading" }, "\uB0B4 \uC9C0\uAC11\uC744 \uC5EC\uB294 \uC911\u2026")));
   if (!data.budget) return /* @__PURE__ */ React.createElement(Phone, { now }, /* @__PURE__ */ React.createElement("main", { className: "app" }, /* @__PURE__ */ React.createElement(Setup, { onSave: store.saveSettings, store })));
   const saveSettings = async (budget, limits) => {
     const changes = B.logBudgetChange(data.changes, data.budget, budget, Date.now());
     const prev = data.budget;
-    await store.saveSettings(budget, limits, changes);
+    await store.saveSettings(budget, limits, changes, period);
     if (prev !== budget) {
-      const after = B.summary({ budget, expenses: data.expenses, today });
+      const after = B.summary({ budget, expenses: data.expenses, today, period });
       say(
         "\uC608\uC0B0\uC744 " + fmt(budget) + "\uC6D0\uC73C\uB85C \uBC14\uAFE8\uC5B4\uC694 \xB7 \uD558\uB8E8 " + fmt(after.dailyAllowance) + "\uC6D0",
         async () => {
-          await store.saveSettings(prev, data.limits, data.changes);
+          await store.saveSettings(prev, data.limits, data.changes, period);
           setToast(null);
         },
         "good"
       );
     }
   };
+  const savePeriod = async (next) => {
+    const prevPeriod = period;
+    await store.saveSettings(data.budget, data.limits, data.changes, next);
+    const after = B.summary({ budget: data.budget, expenses: data.expenses, today, period: next });
+    const r = B.periodRange(today, next);
+    const what = !next ? "\uB2EC\uB825 \uD55C \uB2EC \uAE30\uC900\uC73C\uB85C \uBC14\uAFE8\uC5B4\uC694" : r.custom ? words(r).range + " \uAE30\uAC04\uC73C\uB85C \uBC14\uAFE8\uC5B4\uC694" : "\uAE30\uAC04\uC744 \uC800\uC7A5\uD588\uC5B4\uC694";
+    say(
+      what + " \xB7 \uD558\uB8E8 " + fmt(after.dailyAllowance) + "\uC6D0",
+      async () => {
+        await store.saveSettings(data.budget, data.limits, data.changes, prevPeriod);
+        setToast(null);
+      },
+      "good"
+    );
+  };
   const envAfter = (category, amount) => {
-    const after = B.envelopes({ budget: data.budget, limits: data.limits, expenses: [...data.expenses, { date: today, amount, category }], today });
+    const after = B.envelopes({ budget: data.budget, limits: data.limits, expenses: [...data.expenses, { date: today, amount, category }], today, period });
     return after.list.find((e) => e.category === category && e.level !== "none");
   };
   const addExpense = async ({ amount, category, memo, fromWish }) => {
@@ -1821,8 +1981,11 @@ function App() {
   const overlay = /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("nav", { className: "tabbar", "aria-label": "\uD654\uBA74 \uC774\uB3D9" }, /* @__PURE__ */ React.createElement("div", { className: "tabbar-in" }, TABS.slice(0, 2).map((t) => /* @__PURE__ */ React.createElement(TabBtn, { key: t.id, t, tab, go, badge: t.id === "wish" ? readyCount : 0 })), /* @__PURE__ */ React.createElement("button", { type: "button", className: "tab-add", onClick: () => setAdding(true), "aria-label": "\uC9C0\uCD9C \uAE30\uB85D\uD558\uAE30" }, /* @__PURE__ */ React.createElement(Icon, { name: "plus", size: 26, stroke: 2.6 })), TABS.slice(2).map((t) => /* @__PURE__ */ React.createElement(TabBtn, { key: t.id, t, tab, go, badge: 0 })))), /* @__PURE__ */ React.createElement(AddSheet, { open: adding, onClose: () => setAdding(false), onAdd: addExpense, onToWish: addWish, envList: env.list }), /* @__PURE__ */ React.createElement(SettingsSheet, { open: settings, budget: data.budget, limits: data.limits, onSave: saveSettings, onClose: () => setSettings(false), storeLabel: store.label, onBudget: () => {
     setSettings(false);
     setBudgetOpen(true);
-  }, store, onBackup: (m2) => say(m2, null, "good") }), /* @__PURE__ */ React.createElement(BudgetSheet, { open: budgetOpen, budget: data.budget, limits: data.limits, changes: data.changes, expenses: data.expenses, today, onSave: saveSettings, onClose: () => setBudgetOpen(false) }), toast && /* @__PURE__ */ React.createElement("div", { className: cx("snack", toast.tone), key: toast.k, role: "status" }, /* @__PURE__ */ React.createElement("span", { className: "ic", "aria-hidden": "true" }, toast.tone === "bad" || toast.tone === "warn" ? "!" : "\u2713"), /* @__PURE__ */ React.createElement("span", null, toast.msg), toast.undo && /* @__PURE__ */ React.createElement("button", { type: "button", onClick: toast.undo }, "\uB418\uB3CC\uB9AC\uAE30")));
-  return /* @__PURE__ */ React.createElement(Phone, { now, overlay }, /* @__PURE__ */ React.createElement("main", { className: "app" }, /* @__PURE__ */ React.createElement("header", { className: "topbar" }, /* @__PURE__ */ React.createElement("span", { className: "brand" }, "\uC624\uB298\uC758 ", /* @__PURE__ */ React.createElement("b", null, "\uC9C0\uAC11")), /* @__PURE__ */ React.createElement("span", { className: "spacer" }), /* @__PURE__ */ React.createElement("span", { className: "date num" }, m, "\uC6D4 ", d, "\uC77C ", WEEK[new Date(y, m - 1, d).getDay()], "\uC694\uC77C"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "icon-btn", onClick: () => setSettings(true), "aria-label": "\uC608\uC0B0\xB7\uBD09\uD22C \uC124\uC815" }, /* @__PURE__ */ React.createElement(Icon, { name: "gear", size: 22 }))), tab === "home" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(TodayCard, { s, onAdd: () => setAdding(true) }), /* @__PURE__ */ React.createElement(PaceCard, { s, budget: data.budget, today, onEdit: () => setBudgetOpen(true) }), /* @__PURE__ */ React.createElement(Shortcuts, { sum, tip: tips[0], go }), /* @__PURE__ */ React.createElement(EnvelopeCard, { env, onSettings: () => setSettings(true) })), tab === "wish" && /* @__PURE__ */ React.createElement(WishTab, { wishes: data.wishes, now, data, today, onAdd: addWish, onBuy: buyWish, onDrop: dropWish, onRemove: removeWish }), tab === "report" && /* @__PURE__ */ React.createElement(ReportTab, { data, today, p, tips, env, sum, store }), tab === "history" && /* @__PURE__ */ React.createElement(HistoryTab, { expenses: data.expenses, today, onDelete: delExpense })));
+  }, onPeriod: () => {
+    setSettings(false);
+    setPeriodOpen(true);
+  }, per, store, onBackup: (m2) => say(m2, null, "good") }), /* @__PURE__ */ React.createElement(BudgetSheet, { open: budgetOpen, budget: data.budget, limits: data.limits, changes: data.changes, expenses: data.expenses, today, period, onSave: saveSettings, onClose: () => setBudgetOpen(false) }), /* @__PURE__ */ React.createElement(PeriodSheet, { open: periodOpen, period, budget: data.budget, expenses: data.expenses, today, onSave: savePeriod, onClose: () => setPeriodOpen(false) }), toast && /* @__PURE__ */ React.createElement("div", { className: cx("snack", toast.tone), key: toast.k, role: "status" }, /* @__PURE__ */ React.createElement("span", { className: "ic", "aria-hidden": "true" }, toast.tone === "bad" || toast.tone === "warn" ? "!" : "\u2713"), /* @__PURE__ */ React.createElement("span", null, toast.msg), toast.undo && /* @__PURE__ */ React.createElement("button", { type: "button", onClick: toast.undo }, "\uB418\uB3CC\uB9AC\uAE30")));
+  return /* @__PURE__ */ React.createElement(Phone, { now, overlay }, /* @__PURE__ */ React.createElement("main", { className: "app" }, /* @__PURE__ */ React.createElement("header", { className: "topbar" }, /* @__PURE__ */ React.createElement("span", { className: "brand" }, "\uC624\uB298\uC758 ", /* @__PURE__ */ React.createElement("b", null, "\uC9C0\uAC11")), /* @__PURE__ */ React.createElement("span", { className: "spacer" }), /* @__PURE__ */ React.createElement("span", { className: "date num" }, m, "\uC6D4 ", d, "\uC77C ", WEEK[new Date(y, m - 1, d).getDay()], "\uC694\uC77C"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "icon-btn", onClick: () => setSettings(true), "aria-label": "\uC608\uC0B0\xB7\uBD09\uD22C \uC124\uC815" }, /* @__PURE__ */ React.createElement(Icon, { name: "gear", size: 22 }))), tab === "home" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(TodayCard, { s, per, onAdd: () => setAdding(true) }), /* @__PURE__ */ React.createElement(PaceCard, { s, per, budget: data.budget, onEdit: () => setBudgetOpen(true), onPeriod: () => setPeriodOpen(true) }), /* @__PURE__ */ React.createElement(Shortcuts, { sum, tip: tips[0], go, per }), /* @__PURE__ */ React.createElement(EnvelopeCard, { env, onSettings: () => setSettings(true) })), tab === "wish" && /* @__PURE__ */ React.createElement(WishTab, { wishes: data.wishes, now, data, today, onAdd: addWish, onBuy: buyWish, onDrop: dropWish, onRemove: removeWish }), tab === "report" && /* @__PURE__ */ React.createElement(ReportTab, { data, today, p, tips, env, sum, store }), tab === "history" && /* @__PURE__ */ React.createElement(HistoryTab, { expenses: data.expenses, today, period, onDelete: delExpense })));
 }
 function TabBtn({ t, tab, go, badge }) {
   const on = tab === t.id;
